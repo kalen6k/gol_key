@@ -177,7 +177,7 @@ def setup_model_and_env(config):
     print(f"Observation space: {vec_env.observation_space.shape}")
 
     # Policy Kwargs
-    vlm_internal_batch = 8  #hopefully we can not run out of memory this time
+    vlm_internal_batch = 4
     policy_kwargs = dict(
         features_extractor_class=VLMExtractor,
         features_extractor_kwargs=dict(agent=vlm_agent, vlm_internal_batch_size=vlm_internal_batch),
@@ -279,6 +279,16 @@ if __name__ == "__main__":
             log_interval=1 # Log basic SB3 stats every rollout ( N_STEPS * N_ENVS steps)
         )
         print("\n--- Training finished successfully ---")
+    except torch.cuda.OutOfMemoryError:
+        print("!!! CAUGHT CUDA OOM ERROR !!!")
+        traceback.print_exc()
+        final_model_name = "final_model_oom"
+    except RuntimeError as e:
+        print(f"!!! CAUGHT RUNTIME ERROR: {e} !!!")
+        if "CUDA" in str(e):
+            print("Looks like a CUDA Runtime error.")
+        traceback.print_exc()
+        final_model_name = "final_model_runtime_error"
     except KeyboardInterrupt:
         print("\n--- Training Interrupted by User ---")
         final_model_name = "final_model_interrupted"
