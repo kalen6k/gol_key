@@ -1,0 +1,58 @@
+# ───────── Python / pip / venv ──────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+dist/
+build/
+# editable‑install marker
+pip-wheel-metadata/
+
+# local virtual‑envs
+venv/
+.env/
+.python-version
+
+# ───────── Test & coverage artefacts ───────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.cache/
+pytest_debug.log
+
+# ───────── IDEs & editors ──────────────────────────────────────────
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
+
+# ───────── Experiment artefacts (large, regenerated) ──────────────
+# SB3 checkpoints & logs
+checkpoints/
+runs/                # tensorboard
+wandb/               # W&B local run dirs
+
+# Hugging Face downloads (can be re‑pulled)
+models/
+Qwen/
+
+# Gameplay screenshots or raw assets that can be rebuilt
+assets/
+
+# ───────── Generated data files ────────────────────────────────────
+train_words.txt
+test_words.txt
+
+# ───────── OS‑specific cruft ───────────────────────────────────────
+*.swp
+*.swo
+*.tmp
+
+# WandB & TensorBoard
+runs/
+wandb/
