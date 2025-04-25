@@ -53,31 +53,26 @@ A research playground that combines Conway’s Game of Life–style dynamics wit
 3. **Create and activate a virtual environment**
 
    ```zsh
-   python3 gol_key_viewer.py competitive-lg
+   python -m venv venv
+   source venv/bin/activate
    ```
    
 4. **Install dependencies into the venv**
 
    ```zsh
-   python3 gol_key_viewer.py competitive-lg-prefix
-   ```
-   
-5. **Environment variables**
-
-   ```zsh
-   python3 gol_key_viewer.py
+   pip install stable-baselines3 wandb gymnasium pillow transformers accelerate xformers huggingface_hub wordfreq torch num2words numba tensorboard
    ```
 
-6. **Prepare word lists**
+5. **Prepare word lists**
    
    ```zsh
-   python3 prepare_word_lists.py
+   python prepare_word_lists.py
    ```
 
-7. **Run training (adjust internal batch size in train.py if OOM, this runs (albeit slowly) on an A100)**
+6. **Run training (adjust internal batch size in train.py if OOM, this runs (albeit slowly) on an A100)**
    
   ```zsh
-  python3 train.py --config stage_gpu_cfg.py
+  python train.py --config stage_gpu_cfg.py
   ```
 
 ---
@@ -152,23 +147,23 @@ graph TD
 1. **Random agent**
 
    ```zsh
-   python3 gol_key_viewer.py --agent random
+   python gol_key_viewer.py --agent random
 2. **Target hidden**
 
    ```zsh
-   python3 gol_key_viewer.py competitive
+   python gol_key_viewer.py competitive
 3. **Target hidden, length given**
 
    ```zsh
-   python3 gol_key_viewer.py competitive-lg
+   python gol_key_viewer.py competitive-lg
 4. **Target hidden, length given, prefix progress**
 
    ```zsh
-   python3 gol_key_viewer.py competitive-lg-prefix
+   python gol_key_viewer.py competitive-lg-prefix
 5. **default: user-driven input with full information**
 
    ```zsh
-   python3 gol_key_viewer.py
+   python gol_key_viewer.py
 
 ---
 
