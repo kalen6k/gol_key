@@ -139,7 +139,7 @@ class VLMExtractor(BaseFeaturesExtractor):
         # Assuming obs is (B, C, H, W) due to VecTransposeImage
         with torch.no_grad():
             raw_features = self.agent.embed(obs, max_batch=self.vlm_internal_batch_size)
-        features = self.proj(raw_features).float()
+        features = self.proj(raw_features)
         return features
 
 # --- Setup Function ---
