@@ -165,7 +165,7 @@ class GOLKeyAgent:
             ).to(self.device)
 
             if 'pixel_values' in inputs:
-                inputs['pixel_values'] = inputs['pixel_values'].to(self.dtype)
+                inputs['pixel_values'] = inputs['pixel_values'].to(self.vlm_dtype)
 
             generated_ids = self.model.generate(
                 **inputs,
@@ -189,4 +189,5 @@ class GOLKeyAgent:
 
         except Exception as e:
             warnings.warn(f"[guess_word ERROR] Failed: {e}. Returning empty string.")
-            traceback
+            traceback.print_exc()
+            return ""
