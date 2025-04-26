@@ -184,7 +184,7 @@ def setup_model_and_env(config):
     print(f"Observation space: {vec_env.observation_space.shape}")
 
     # Policy Kwargs
-    vlm_internal_batch = 32
+    vlm_internal_batch = 16
     policy_kwargs = dict(
         features_extractor_class=VLMExtractor,
         features_extractor_kwargs=dict(agent=vlm_agent, vlm_internal_batch_size=vlm_internal_batch),
