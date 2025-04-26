@@ -12,7 +12,7 @@ unsloth_available = False
 if torch.cuda.is_available():
     try:
         # Conditionally import only if CUDA is available
-        from unsloth import FastLanguageModel
+        from unsloth import FastVisionModel
         unsloth_available = True
         print("Unsloth library found.")
     except ImportError:
@@ -68,15 +68,15 @@ class GOLKeyAgent:
             print(f"GOLKeyAgent: CUDA detected and Unsloth available. Loading 4-bit Qwen-2.5-VL model: {unsloth_model_dir}")
             try:
                 self.compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-                self.model, self.tokenizer = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                self.model, self.tokenizer = FastVisionModel.from_pretrained(
                     model_name=unsloth_model_dir,
                     max_seq_length=max_seq_length,
                     dtype=self.compute_dtype,
                     load_in_4bit=True,
-                    attn_implementation="flash_attention_2",
-                    device_map="auto",
+                    device_map=None, # Load to CPU first
                     trust_remote_code=True
                 )
+                self.model.to(self.device)
                 print("GOLKeyAgent: Unsloth 4-bit Qwen-2.5-VL model loaded.")
                 for param in self.model.parameters():
                     param.requires_grad = False
