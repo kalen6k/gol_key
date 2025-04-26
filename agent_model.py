@@ -41,7 +41,8 @@ class GOLKeyAgent:
                                torch.backends.mps.is_available()) else "cpu"
 
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
-        self.dtype  = (
+        
+        self.vlm_dtype  = (
             torch.bfloat16 if self.device.type == "cuda" and
                               torch.cuda.is_bf16_supported()
             else torch.float16 if self.device.type != "cpu"
@@ -51,11 +52,10 @@ class GOLKeyAgent:
         # -------- load model / processor ---------------------------------------
         self.model     = Qwen2_5_VLForConditionalGeneration.from_pretrained(
                             model_dir,
-                            torch_dtype = self.dtype,
+                            torch_dtype = self.vlm_dtype,
                             device_map  = self.device,
                             trust_remote_code = True
                         ).eval()
-        # no end-to-end finetuning yet
         self.model.visual.requires_grad_(False)
 
         self.processor = AutoProcessor.from_pretrained(
@@ -67,7 +67,7 @@ class GOLKeyAgent:
 
         # Ensure projection layer uses the correct dtype AND device
         self.intermediate_state = 256 # SB3 feature size
-        self.proj = nn.Linear(self.patch_dim, self.intermediate_state).to(device=self.device, dtype=torch.bfloat16)
+        self.proj = nn.Linear(self.patch_dim, self.intermediate_state).to(device=self.device, dtype=torch.bfloat32)
 
 
     def embed(self, imgs: torch.Tensor, max_batch=None) -> torch.Tensor:
@@ -89,7 +89,7 @@ class GOLKeyAgent:
             # --- Prepare final inputs ---
             final_inputs = {
                 'input_ids': inputs['input_ids'].to(torch.long),
-                'pixel_values': inputs['pixel_values'].to(self.dtype),
+                'pixel_values': inputs['pixel_values'].to(self.vlm_dtype),
                 'image_grid_thw': inputs['image_grid_thw'].to(torch.long)
             }
             if 'attention_mask' in inputs:
