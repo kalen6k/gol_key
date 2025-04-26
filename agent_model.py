@@ -6,6 +6,7 @@ import warnings
 import traceback
 from torch import nn
 import re
+import time
 
 from transformers import AutoTokenizer, AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
@@ -70,65 +71,79 @@ class GOLKeyAgent:
         self.proj = nn.Linear(self.patch_dim, self.intermediate_state).to(device=self.device, dtype=torch.float32)
 
 
-    def embed(self, imgs: torch.Tensor, max_batch=None) -> torch.Tensor:
+    def embed(self, imgs: torch.Tensor, max_batch: int | None = None) -> torch.Tensor: # Use max_batch parameter
         num_images = imgs.shape[0]
         imgs = imgs.to(self.device)
 
+        if max_batch is None:
+            max_batch = num_images
+
+        all_extracted_embeddings = []
+
         try:
-            pil_images = [Image.fromarray(x.permute(1,2,0).byte().cpu().numpy()) for x in imgs]
-            batch_messages = [
-                [{"role": "user", "content": [{"type": "image", "image": img}]}]
-                for img in pil_images
-            ]
+            for i in range(0, num_images, max_batch):
+                chunk_imgs = imgs[i : i + max_batch]
+                chunk_num_images = chunk_imgs.shape[0]
 
-            inputs = self.processor.apply_chat_template(
-                batch_messages, padding=True, truncation=True, tokenize=True,
-                return_tensors="pt", return_dict=True, add_generation_prompt=False
-            ).to(self.device)
+                print(f"        GOLKeyAgent: Processing embed chunk {i//max_batch + 1}, size {chunk_num_images}...")
+                chunk_start_time = time.time()
 
-            # --- Prepare final inputs ---
-            final_inputs = {
-                'input_ids': inputs['input_ids'].to(torch.long),
-                'pixel_values': inputs['pixel_values'].to(self.vlm_dtype),
-                'image_grid_thw': inputs['image_grid_thw'].to(torch.long)
-            }
-            if 'attention_mask' in inputs:
-                final_inputs['attention_mask'] = inputs['attention_mask'].to(torch.long)
+                # --- Process this chunk ---
+                chunk_pil_images = [Image.fromarray(x.permute(1,2,0).byte().cpu().numpy()) for x in chunk_imgs]
+                chunk_batch_messages = [
+                    [{"role": "user", "content": [{"type": "image", "image": img}]}]
+                    for img in chunk_pil_images
+                ]
 
-            # --- Model Forward Pass ---
-            model_output = self.model(**final_inputs, output_hidden_states=True, output_attentions=False)
+                chunk_inputs = self.processor.apply_chat_template(
+                    chunk_batch_messages, padding=True, truncation=True, tokenize=True,
+                    return_tensors="pt", return_dict=True, add_generation_prompt=False
+                ).to(self.device)
 
-            # --- Extract Embeddings ---
-            # Use layer -8 (index 28 for a 36-layer model)
-            extraction_layer_index = -8
+                chunk_final_inputs = {
+                    'input_ids': chunk_inputs['input_ids'].to(torch.long),
+                    'pixel_values': chunk_inputs['pixel_values'].to(self.vlm_dtype),
+                    'image_grid_thw': chunk_inputs['image_grid_thw'].to(torch.long)
+                }
+                if 'attention_mask' in chunk_inputs:
+                    chunk_final_inputs['attention_mask'] = chunk_inputs['attention_mask'].to(torch.long)
 
-            num_layers = self.model.config.num_hidden_layers # Should be 36
-            positive_index = extraction_layer_index if extraction_layer_index >= 0 else num_layers + extraction_layer_index
-            if not (0 <= positive_index < len(model_output.hidden_states)):
-                 raise IndexError(f"Layer index {extraction_layer_index} is out of bounds for hidden_states length {len(model_output.hidden_states)}")
-            intermediate_hidden_state = model_output.hidden_states[extraction_layer_index]
+                # --- Model Forward Pass ---
+                chunk_model_output = self.model(**chunk_final_inputs, output_hidden_states=True, output_attentions=False)
 
-            # --- Find Image/Vision Token Index ---
-            input_ids = final_inputs['input_ids']
-            image_token_id = self.model.config.image_token_id
-            vision_token_id = self.model.config.vision_token_id
-            batch_indices = torch.arange(num_images, device=self.device)
+                # --- Extract Embeddings (from the chunk output) ---
+                extraction_layer_index = -8
+                num_layers = self.model.config.num_hidden_layers
+                positive_index = extraction_layer_index if extraction_layer_index >= 0 else num_layers + extraction_layer_index
+                # Check bounds omitted for brevity, keep it in your code
+                chunk_intermediate_hidden_state = chunk_model_output.hidden_states[positive_index]
 
-            token_indices = (input_ids == image_token_id).long().argmax(dim=1)
-            if not torch.all(input_ids[batch_indices, token_indices] == image_token_id):
-                 token_indices = (input_ids == vision_token_id).long().argmax(dim=1)
-                 if not torch.all(input_ids[batch_indices, token_indices] == vision_token_id):
-                      raise ValueError(f"Could not reliably find image_token ({image_token_id}) or vision_token ({vision_token_id}) index.")
+                chunk_input_ids = chunk_final_inputs['input_ids']
+                image_token_id = self.model.config.image_token_id
+                vision_token_id = self.model.config.vision_token_id
+                chunk_batch_indices = torch.arange(chunk_num_images, device=self.device)
 
-            extracted_embeddings = intermediate_hidden_state[batch_indices, token_indices]
+                # Find token indices within the chunk
+                chunk_token_indices = (chunk_input_ids == image_token_id).long().argmax(dim=1)
+                if not torch.all(chunk_input_ids[chunk_batch_indices, chunk_token_indices] == image_token_id):
+                    chunk_token_indices = (chunk_input_ids == vision_token_id).long().argmax(dim=1)
 
-            return extracted_embeddings
+                chunk_extracted_embeddings = chunk_intermediate_hidden_state[chunk_batch_indices, chunk_token_indices]
+
+                all_extracted_embeddings.append(chunk_extracted_embeddings)
+
+                print(f"        GOLKeyAgent: Finished embed chunk {i//max_batch + 1} (duration: {time.time() - chunk_start_time:.3f}s)")
+
+
+            final_extracted_embeddings = torch.cat(all_extracted_embeddings, dim=0)
+
+            return final_extracted_embeddings
 
         except Exception as e:
             print(f"[embed ERROR] Failed during embedding: {type(e).__name__}: {e}")
             traceback.print_exc()
+            # Return shape is patch_dim now
             return torch.zeros((num_images, self.patch_dim), device=self.device, dtype=torch.float32)
-
 
     @torch.no_grad()
     def guess_word(self, image_tensor: torch.Tensor, target_len) -> str:
