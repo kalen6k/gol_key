@@ -65,16 +65,8 @@ class GOLKeyAgent:
                 self.compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
                 print(f"GOLKeyAgent: Using compute dtype: {self.compute_dtype}")
 
-                bnb_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_quant_type="nf4",
-                    bnb_4bit_compute_dtype=self.compute_dtype,
-                    bnb_4bit_use_double_quant=True,
-                )
-
                 model_kwargs = {
                     "trust_remote_code": True,
-                    "quantization_config": bnb_config,
                     "device_map": "auto",
                     "attn_implementation": "eager"
                 }
