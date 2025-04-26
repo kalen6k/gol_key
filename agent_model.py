@@ -67,7 +67,7 @@ class GOLKeyAgent:
 
         # Ensure projection layer uses the correct dtype AND device
         self.intermediate_state = 256 # SB3 feature size
-        self.proj = nn.Linear(self.patch_dim, self.intermediate_state).to(device=self.device, dtype=torch.float32)
+        self.proj = nn.Linear(self.patch_dim, self.intermediate_state).to(device=self.device, dtype=torch.bfloat16)
 
 
     def embed(self, imgs: torch.Tensor, max_batch=None) -> torch.Tensor:
