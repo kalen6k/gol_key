@@ -68,11 +68,12 @@ class GOLKeyAgent:
             print(f"GOLKeyAgent: CUDA detected and Unsloth available. Loading 4-bit Qwen-2.5-VL model: {unsloth_model_dir}")
             try:
                 self.compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-                self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+                self.model, self.tokenizer = Qwen2_5_VLForConditionalGeneration.from_pretrained(
                     model_name=unsloth_model_dir,
                     max_seq_length=max_seq_length,
                     dtype=self.compute_dtype,
                     load_in_4bit=True,
+                    attn_implementation="flash_attention_2",
                     device_map="auto",
                     trust_remote_code=True
                 )
@@ -112,8 +113,9 @@ class GOLKeyAgent:
                            model_dir,
                            torch_dtype=self.compute_dtype,
                            device_map=None,
+                           attn_implementation="flash_attention_2",
                            trust_remote_code=True
-                       ).to(self.device).eval()
+                        ).to(self.device).eval()
         self.model.visual.requires_grad_(False)
         self.tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
         self.processor = AutoProcessor.from_pretrained(model_dir, trust_remote_code=True)
