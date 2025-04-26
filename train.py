@@ -137,9 +137,14 @@ class VLMExtractor(BaseFeaturesExtractor):
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         # SB3 handles device placement. Pass obs directly to agent's embed.
         # Assuming obs is (B, C, H, W) due to VecTransposeImage
+        print(f"    VLMExtractor: Entering forward...")
         with torch.no_grad():
+            print(f"    VLMExtractor: Calling agent.embed...")
             raw_features = self.agent.embed(obs, max_batch=self.vlm_internal_batch_size)
+            print(f"    VLMExtractor: Returned from agent.embed.")
+        print(f"    VLMExtractor: Calling self.proj...")
         features = self.proj(raw_features.to(torch.float32))
+        print(f"    VLMExtractor: Exiting forward.")
         return features
 
 # --- Setup Function ---
@@ -278,7 +283,7 @@ if __name__ == "__main__":
         model.learn(
             total_timesteps=C.TOTAL_STEPS,
             callback=CallbackList(callbacks),
-            log_interval=1 # Log basic SB3 stats every rollout ( N_STEPS * N_ENVS steps)
+            log_interval=1
         )
         print("\n--- Training finished successfully ---")
     except torch.cuda.OutOfMemoryError:
