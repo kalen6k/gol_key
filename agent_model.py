@@ -167,6 +167,10 @@ class GOLKeyAgent:
 
                 # --- Model Forward Pass ---
                 chunk_model_output = self.model(**chunk_final_inputs, output_hidden_states=True, output_attentions=False)
+                if not torch.isfinite(chunk_model_output.last_hidden_state).all():
+                    print(f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+                    print(f"WARNING: NaNs or Infs detected in model output for chunk {i//max_batch + 1}!")
+                    print(f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
 
                 # --- Extract Embeddings (from the chunk output) ---
                 extraction_layer_index = -8
