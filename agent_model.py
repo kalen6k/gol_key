@@ -37,14 +37,13 @@ PROMPT = (
 class GOLKeyAgent:
     def __init__(
         self,
-        model_dir: str = "unsloth/Qwen2.5-VL-3B-Instruct-unsloth-bnb-4bit",
-        unsloth_model_dir: str = "unsloth/Qwen2.5-VL-3B-Instruct-unsloth-bnb-4bit",
+        # === Default to BASE model ===
+        model_dir: str = "Qwen/Qwen2.5-VL-3B-Instruct",
         device: str = "cuda",
-        max_seq_length: int = 2048,
     ):
         super().__init__()
 
-        # -------- device & dtype ------------------------------------------------
+        # --- Determine Device ---
         resolved_device = "cpu"
         can_use_cuda = device == "cuda" and torch.cuda.is_available()
         can_use_mps = device == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
@@ -54,78 +53,88 @@ class GOLKeyAgent:
         elif can_use_mps:
             resolved_device = "mps"
         elif device == "cpu":
-             resolved_device = "cpu"
+            resolved_device = "cpu"
         else:
             print(f"Warning: Requested device '{device}' not available. Using CPU.")
             resolved_device = "cpu"
         self.device = torch.device(resolved_device)
-        if self.device.type == 'cuda' and unsloth_or_bnb_possible:
-            print(f"GOLKeyAgent: CUDA detected. Attempting to load 4-bit model via transformers: {unsloth_model_dir}")
-            try:
-                self.compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-                print(f"GOLKeyAgent: Using compute dtype: {self.compute_dtype}")
+        print(f"GOLKeyAgent: Using device: {self.device}")
 
-                model_kwargs = {
-                    "trust_remote_code": True,
-                    "device_map": "auto",
-                    "attn_implementation": "eager"
-                }
-
-                self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                                    unsloth_model_dir,
-                                    **model_kwargs
-                                )
-                self.model.eval()
-                print("GOLKeyAgent: Loaded 4-bit model via transformers.")
-
-                base_model_name = "Qwen/Qwen2.5-VL-3B-Instruct"
-                self.processor = AutoProcessor.from_pretrained(base_model_name, trust_remote_code=True)
-                self.tokenizer = AutoTokenizer.from_pretrained(base_model_name, trust_remote_code=True)
-                print("GOLKeyAgent: Processor and Tokenizer loaded.")
-
-                try:
-                    self.patch_dim = getattr(self.model.config.vision_config, "out_hidden_size", 2048)
-                except AttributeError:
-                     print("Warning: Could not read patch_dim from config, using default 2048.")
-                     self.patch_dim = 2048
-
-            except Exception as e:
-                print(f"ERROR loading 4-bit model via transformers: {e}")
-                traceback.print_exc()
-                print("Falling back to base model.")
-                self._load_base_model(model_dir)
-
+        # --- Determine Compute Dtype ---
+        if self.device.type == "cuda":
+            self.compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        elif self.device.type == "mps":
+            self.compute_dtype = torch.float16
         else:
-            print(f"GOLKeyAgent: Loading standard HF Qwen-2.5-VL model: {model_dir}")
-            self._load_base_model(model_dir)
+            self.compute_dtype = torch.float32
+        print(f"GOLKeyAgent: Using compute dtype: {self.compute_dtype}")
 
+        # --- Load Standard HF Model ---
+        print(f"GOLKeyAgent: Loading standard HF model: {model_dir}")
+        try:
+            attn_implementation = "sdpa"
+            if self.device.type == 'cuda':
+                 try:
+                      import flash_attn
+                      attn_implementation="flash_attention_2"
+                      print("GOLKeyAgent: flash_attn package found, requesting 'flash_attention_2'.")
+                 except ImportError:
+                      print("GOLKeyAgent: flash_attn package not found, using default 'sdpa' attn_implementation.")
+
+            self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                               model_dir,
+                               torch_dtype=self.compute_dtype,
+                               attn_implementation=attn_implementation,
+                               device_map=None,
+                               trust_remote_code=True
+                           ).to(self.device).eval()
+            self.model.visual.requires_grad_(False)
+            print("GOLKeyAgent: Standard HF model loaded successfully.")
+
+            self.patch_dim = getattr(self.model.config.vision_config, "out_hidden_size", 2048)
+
+        except Exception as e:
+            print(f"FATAL: Failed to load base model {model_dir}: {e}")
+            traceback.print_exc()
+            raise
+
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
+            print("GOLKeyAgent: Tokenizer loaded.")
+        except Exception as e:
+             print(f"FATAL: Failed to load tokenizer for {model_dir}: {e}")
+             traceback.print_exc()
+             raise
+
+        try:
+            print("GOLKeyAgent: Attempting to load Fast Processor...")
+            self.processor = AutoProcessor.from_pretrained(
+                model_dir,
+                use_fast=True,
+                trust_remote_code=True
+            )
+            print("GOLKeyAgent: Fast Processor loaded successfully.")
+        except Exception as e_fast:
+            print(f"GOLKeyAgent: Could not load Fast Processor ({e_fast}), falling back to Slow Processor.")
+            try:
+                self.processor = AutoProcessor.from_pretrained(
+                    model_dir,
+                    use_fast=False,
+                    trust_remote_code=True
+                )
+                print("GOLKeyAgent: Slow Processor loaded successfully.")
+            except Exception as e_slow:
+                 print(f"FATAL: Failed to load even Slow Processor for {model_dir}: {e_slow}")
+                 traceback.print_exc()
+                 raise
+
+        # --- Initialize Projection Layer ---
         self.intermediate_state = 256
         self.proj = nn.Linear(self.patch_dim, self.intermediate_state).to(device=self.device, dtype=torch.float32)
         self.proj.requires_grad_(True)
         print(f"GOLKeyAgent: Projection layer initialized (dtype: {self.proj.weight.dtype}).")
 
-    def _load_base_model(self, model_dir):
-        """Helper to load the standard HF model."""
-        if self.device.type == 'mps':
-            self.compute_dtype = torch.float16
-        else:
-             self.compute_dtype = torch.float32
-        print(f"GOLKeyAgent (Base Load): Using compute dtype: {self.compute_dtype}")
-
-        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                           model_dir,
-                           torch_dtype=self.compute_dtype,
-                           device_map=None,
-                           attn_implementation="flash_attention_2",
-                           trust_remote_code=True
-                        ).to(self.device).eval()
-        self.model.visual.requires_grad_(False)
-        self.tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
-        self.processor = AutoProcessor.from_pretrained(model_dir, trust_remote_code=True)
-        self.patch_dim = getattr(self.model.config.vision_config, "out_hidden_size", 2048)
-        print("GOLKeyAgent: Standard HF model loaded.")
-
-    def embed(self, imgs: torch.Tensor, max_batch: int | None = None) -> torch.Tensor: # Use max_batch parameter
+    def embed(self, imgs: torch.Tensor, max_batch: int | None = None) -> torch.Tensor:
         num_images = imgs.shape[0]
         imgs = imgs.to(self.device)
 
