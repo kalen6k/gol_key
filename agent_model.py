@@ -67,9 +67,9 @@ class GOLKeyAgent:
 
         # Ensure projection layer uses the correct dtype AND device
         self.intermediate_state = 256 # SB3 feature size
-        self.cls_proj = nn.Linear(self.patch_dim, self.intermediate_state).to(device=self.device, dtype=self.dtype)
+        self.proj = nn.Linear(self.patch_dim, self.intermediate_state).to(device=self.device, dtype=self.dtype)
 
-    @torch.no_grad()
+
     def embed(self, imgs: torch.Tensor, max_batch=None) -> torch.Tensor:
         num_images = imgs.shape[0]
         imgs = imgs.to(self.device)
@@ -122,14 +122,12 @@ class GOLKeyAgent:
 
             extracted_embeddings = intermediate_hidden_state[batch_indices, token_indices]
 
-            final_embeddings = self.cls_proj(extracted_embeddings)
-
-            return final_embeddings.float()
+            return extracted_embeddings
 
         except Exception as e:
             print(f"[embed ERROR] Failed during embedding: {type(e).__name__}: {e}")
             traceback.print_exc()
-            return torch.zeros((num_images, self.intermediate_state), device=self.device, dtype=torch.float32)
+            return torch.zeros((num_images, self.patch_dim), device=self.device, dtype=torch.float32)
 
 
     @torch.no_grad()

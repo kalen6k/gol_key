@@ -130,14 +130,16 @@ class VLMExtractor(BaseFeaturesExtractor):
     def __init__(self, observation_space, agent: "GOLKeyAgent", vlm_internal_batch_size: int):
         super().__init__(observation_space, features_dim=agent.intermediate_state)
         self.agent = agent
+        self.proj = agent.proj
         self.vlm_internal_batch_size = vlm_internal_batch_size
         print(f"VLMExtractor Initialized: Features Dim = {agent.intermediate_state}")
 
-    @torch.no_grad()
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         # SB3 handles device placement. Pass obs directly to agent's embed.
         # Assuming obs is (B, C, H, W) due to VecTransposeImage
-        features = self.agent.embed(obs, max_batch=self.vlm_internal_batch_size)
+        with torch.no_grad():
+            raw_features = self.agent.embed(obs, max_batch=self.vlm_internal_batch_size)
+        features = self.proj(raw_features).float()
         return features
 
 # --- Setup Function ---
