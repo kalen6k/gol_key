@@ -176,7 +176,7 @@ def setup_model_and_env(config):
             shape=config.GRID_SHAPE,
             max_steps=config.ENV_MAX_STEPS,
             agent_instance=vlm_agent
-        )
+        ),
         n_envs = config.N_ENVS,
         seed = config.SEED,
     )
