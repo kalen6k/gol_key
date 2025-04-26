@@ -41,10 +41,10 @@ DEFAULT_CONFIG = dict(
     # Training Params
     LR          = 3e-4,
     TOTAL_STEPS = 100_000,
-    N_ENVS      = 16,
-    N_STEPS     = 32,    # Rollout buffer size per env
-    BATCH       = 512,   # PPO train batch size
-    N_EPOCHS    = 4,     # PPO epochs per update
+    N_ENVS      = 32,
+    N_STEPS     = 128,   # Rollout buffer size per env
+    BATCH       = 128,   # PPO train batch size
+    N_EPOCHS    = 8,     # PPO epochs per update
     GAMMA       = 0.99,
     GAE_LAMBDA  = 0.95,
     CLIP_RANGE  = 0.2,

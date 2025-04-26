@@ -8,6 +8,17 @@ from torch import nn
 import re
 import time
 
+unsloth_available = False
+if torch.cuda.is_available():
+    try:
+        # Conditionally import only if CUDA is available
+        from unsloth import FastLanguageModel
+        unsloth_available = True
+        print("Unsloth library found.")
+    except ImportError:
+        print("Unsloth library not found or CUDA not available.")
+        pass
+
 from transformers import AutoTokenizer, AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
 PROMPT = (
@@ -31,45 +42,83 @@ PROMPT = (
 class GOLKeyAgent:
     def __init__(
         self,
-        model_dir: str = "Qwen/Qwen2.5-VL-3B-Instruct",
+        model_dir: str = "unsloth/Qwen2.5-VL-3B-Instruct-unsloth-bnb-4bit",
+        unsloth_model_dir: str = "unsloth/Qwen2.5-VL-3B-Instruct-unsloth-bnb-4bit",
         device: str = "cuda",
+        max_seq_length: int = 2048,
     ):
         super().__init__()
 
         # -------- device & dtype ------------------------------------------------
-        if device == "mps":
-            device = "mps" if (hasattr(torch.backends, "mps") and
-                               torch.backends.mps.is_available()) else "cpu"
+        resolved_device = "cpu"
+        can_use_cuda = device == "cuda" and torch.cuda.is_available()
+        can_use_mps = device == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
 
-        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
-        
-        self.vlm_dtype  = (
-            torch.bfloat16 if self.device.type == "cuda" and
-                              torch.cuda.is_bf16_supported()
-            else torch.float16 if self.device.type != "cpu"
-            else torch.float32
-        )
+        if can_use_cuda:
+            resolved_device = "cuda"
+        elif can_use_mps:
+            resolved_device = "mps"
+        elif device == "cpu":
+             resolved_device = "cpu"
+        else:
+            print(f"Warning: Requested device '{device}' not available. Using CPU.")
+            resolved_device = "cpu"
+        self.device = torch.device(resolved_device)
+        if self.device.type == 'cuda' and unsloth_available:
+            print(f"GOLKeyAgent: CUDA detected and Unsloth available. Loading 4-bit Qwen-2.5-VL model: {unsloth_model_dir}")
+            try:
+                self.compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+                self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+                    model_name=unsloth_model_dir,
+                    max_seq_length=max_seq_length,
+                    dtype=self.compute_dtype,
+                    load_in_4bit=True,
+                    device_map="auto",
+                    trust_remote_code=True
+                )
+                print("GOLKeyAgent: Unsloth 4-bit Qwen-2.5-VL model loaded.")
+                for param in self.model.parameters():
+                    param.requires_grad = False
 
-        # -------- load model / processor ---------------------------------------
-        self.model     = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                            model_dir,
-                            torch_dtype = self.vlm_dtype,
-                            device_map  = self.device,
-                            trust_remote_code = True
-                        ).eval()
-        self.model.visual.requires_grad_(False)
+                self.processor = AutoProcessor.from_pretrained(model_dir, trust_remote_code=True)
 
-        self.processor = AutoProcessor.from_pretrained(
-                            model_dir, trust_remote_code = True
-                         )
-        self.tokenizer  = AutoTokenizer.from_pretrained(model_dir,  trust_remote_code=True)
+                vision_config = getattr(self.model.config, "vision_config", None)
+                if vision_config is None and hasattr(self.model, 'model') and hasattr(self.model.model, 'config'):
+                     vision_config = getattr(self.model.model.config, "vision_config", None)
+                self.patch_dim = getattr(vision_config, "out_hidden_size", 2048) if vision_config else 2048
 
-        self.patch_dim = getattr(self.model.config.vision_config, "out_hidden_size", 2048)
+            except Exception as e:
+                print(f"ERROR loading Unsloth model: {e}. Falling back to base model.")
+                self._load_base_model(model_dir)
 
-        # Ensure projection layer uses the correct dtype AND device
-        self.intermediate_state = 256 # SB3 feature size
+        else:
+            print(f"GOLKeyAgent: Loading standard HF Qwen-2.5-VL model: {model_dir}")
+            self._load_base_model(model_dir)
+
+        self.intermediate_state = 256
         self.proj = nn.Linear(self.patch_dim, self.intermediate_state).to(device=self.device, dtype=torch.float32)
+        self.proj.requires_grad_(True)
+        print(f"GOLKeyAgent: Projection layer initialized (dtype: {self.proj.weight.dtype}).")
 
+    def _load_base_model(self, model_dir):
+        """Helper to load the standard HF model."""
+        if self.device.type == 'mps':
+            self.compute_dtype = torch.float16
+        else:
+             self.compute_dtype = torch.float32
+        print(f"GOLKeyAgent (Base Load): Using compute dtype: {self.compute_dtype}")
+
+        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                           model_dir,
+                           torch_dtype=self.compute_dtype,
+                           device_map=None,
+                           trust_remote_code=True
+                       ).to(self.device).eval()
+        self.model.visual.requires_grad_(False)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
+        self.processor = AutoProcessor.from_pretrained(model_dir, trust_remote_code=True)
+        self.patch_dim = getattr(self.model.config.vision_config, "out_hidden_size", 2048)
+        print("GOLKeyAgent: Standard HF model loaded.")
 
     def embed(self, imgs: torch.Tensor, max_batch: int | None = None) -> torch.Tensor: # Use max_batch parameter
         num_images = imgs.shape[0]
@@ -102,7 +151,7 @@ class GOLKeyAgent:
 
                 chunk_final_inputs = {
                     'input_ids': chunk_inputs['input_ids'].to(torch.long),
-                    'pixel_values': chunk_inputs['pixel_values'].to(self.vlm_dtype),
+                    'pixel_values': chunk_inputs['pixel_values'].to(self.compute_dtype),
                     'image_grid_thw': chunk_inputs['image_grid_thw'].to(torch.long)
                 }
                 if 'attention_mask' in chunk_inputs:
@@ -180,7 +229,7 @@ class GOLKeyAgent:
             ).to(self.device)
 
             if 'pixel_values' in inputs:
-                inputs['pixel_values'] = inputs['pixel_values'].to(self.vlm_dtype)
+                inputs['pixel_values'] = inputs['pixel_values'].to(self.compute_dtype)
 
             generated_ids = self.model.generate(
                 **inputs,
