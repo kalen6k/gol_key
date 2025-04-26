@@ -8,12 +8,6 @@ from torch import nn
 import re
 import time
 
-unsloth_or_bnb_possible = torch.cuda.is_available()
-if unsloth_or_bnb_possible:
-    print("CUDA detected, 4-bit quantization is possible.")
-else:
-    print("CUDA not detected, will use base model.")
-
 from transformers import AutoTokenizer, AutoProcessor, Qwen2_5_VLForConditionalGeneration, BitsAndBytesConfig
 
 PROMPT = (
