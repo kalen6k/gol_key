@@ -8,18 +8,13 @@ from torch import nn
 import re
 import time
 
-unsloth_available = False
-if torch.cuda.is_available():
-    try:
-        # Conditionally import only if CUDA is available
-        from unsloth import FastVisionModel
-        unsloth_available = True
-        print("Unsloth library found.")
-    except ImportError:
-        print("Unsloth library not found or CUDA not available.")
-        pass
+unsloth_or_bnb_possible = torch.cuda.is_available()
+if unsloth_or_bnb_possible:
+    print("CUDA detected, 4-bit quantization is possible.")
+else:
+    print("CUDA not detected, will use base model.")
 
-from transformers import AutoTokenizer, AutoProcessor, Qwen2_5_VLForConditionalGeneration
+from transformers import AutoTokenizer, AutoProcessor, Qwen2_5_VLForConditionalGeneration, BitsAndBytesConfig
 
 PROMPT = (
     # ---- task description (unchanged) -----------------------------------
@@ -64,32 +59,48 @@ class GOLKeyAgent:
             print(f"Warning: Requested device '{device}' not available. Using CPU.")
             resolved_device = "cpu"
         self.device = torch.device(resolved_device)
-        if self.device.type == 'cuda' and unsloth_available:
-            print(f"GOLKeyAgent: CUDA detected and Unsloth available. Loading 4-bit Qwen-2.5-VL model: {unsloth_model_dir}")
+        if self.device.type == 'cuda' and unsloth_or_bnb_possible:
+            print(f"GOLKeyAgent: CUDA detected. Attempting to load 4-bit model via transformers: {unsloth_model_dir}")
             try:
                 self.compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-                self.model, self.tokenizer = FastVisionModel.from_pretrained(
-                    model_name=unsloth_model_dir,
-                    max_seq_length=max_seq_length,
-                    dtype=self.compute_dtype,
+                print(f"GOLKeyAgent: Using compute dtype: {self.compute_dtype}")
+
+                bnb_config = BitsAndBytesConfig(
                     load_in_4bit=True,
-                    device_map=None, # Load to CPU first
-                    trust_remote_code=True
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_compute_dtype=self.compute_dtype,
+                    bnb_4bit_use_double_quant=True,
                 )
-                self.model.to(self.device)
-                print("GOLKeyAgent: Unsloth 4-bit Qwen-2.5-VL model loaded.")
-                for param in self.model.parameters():
-                    param.requires_grad = False
 
-                self.processor = AutoProcessor.from_pretrained(model_dir, trust_remote_code=True)
+                model_kwargs = {
+                    "trust_remote_code": True,
+                    "quantization_config": bnb_config,
+                    "device_map": "auto",
+                    "attn_implementation": "eager"
+                }
 
-                vision_config = getattr(self.model.config, "vision_config", None)
-                if vision_config is None and hasattr(self.model, 'model') and hasattr(self.model.model, 'config'):
-                     vision_config = getattr(self.model.model.config, "vision_config", None)
-                self.patch_dim = getattr(vision_config, "out_hidden_size", 2048) if vision_config else 2048
+                self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                                    unsloth_model_dir,
+                                    **model_kwargs
+                                )
+                self.model.eval()
+                print("GOLKeyAgent: Loaded 4-bit model via transformers.")
+
+                base_model_name = "Qwen/Qwen2.5-VL-3B-Instruct"
+                self.processor = AutoProcessor.from_pretrained(base_model_name, trust_remote_code=True)
+                self.tokenizer = AutoTokenizer.from_pretrained(base_model_name, trust_remote_code=True)
+                print("GOLKeyAgent: Processor and Tokenizer loaded.")
+
+                try:
+                    self.patch_dim = getattr(self.model.config.vision_config, "out_hidden_size", 2048)
+                except AttributeError:
+                     print("Warning: Could not read patch_dim from config, using default 2048.")
+                     self.patch_dim = 2048
 
             except Exception as e:
-                print(f"ERROR loading Unsloth model: {e}. Falling back to base model.")
+                print(f"ERROR loading 4-bit model via transformers: {e}")
+                traceback.print_exc()
+                print("Falling back to base model.")
                 self._load_base_model(model_dir)
 
         else:
