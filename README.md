@@ -60,7 +60,7 @@ A research playground that combines Conway’s Game of Life–style dynamics wit
 4. **Install dependencies into the venv**
 
    ```zsh
-   pip install stable-baselines3 wandb gymnasium pillow transformers accelerate xformers huggingface_hub wordfreq torch num2words numba tensorboard
+   pip install stable-baselines3 wandb gymnasium pillow transformers accelerate xformers huggingface_hub wordfreq torch num2words numba tensorboard flash_attn
    ```
 
 5. **Prepare word lists**
