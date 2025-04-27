@@ -3,13 +3,14 @@ from stable_baselines3.common.callbacks import BaseCallback
 import numpy as np, wandb
 from collections import deque
 from gol_key_env import GOLKeyPixelEnv
+import traceback
 
 class LengthCurriculumCallback(BaseCallback):
     """
     Watch the rolling success rate; raise env.max_len when > 50 %.
     Assumes envs are WordTargetWrapper.
     """
-    def __init__(self, target_success=0.5, window=1000, verbose=1):
+    def __init__(self, target_success=0.5, window=250, verbose=1):
         super().__init__(verbose)
         self.targ = target_success
         self.win  = window
@@ -25,7 +26,12 @@ class LengthCurriculumCallback(BaseCallback):
             return True
 
         rate = np.mean(self.hist[-self.win:])
-        cur_len = self.training_env.unwrapped.envs[0].max_len
+        try:
+            word_target_wrapper_env = self.training_env.unwrapped.envs[0].env
+            cur_len = word_target_wrapper_env.max_len
+        except:
+            print(f"ERROR in LengthCurriculumCallback: Could not access env wrappers correctly: {e}")
+            traceback.print_exc()
         if rate >= self.targ and cur_len < 8:
             new_len = cur_len + 1
             if self.verbose:
