@@ -573,7 +573,8 @@ class GOLKeyPixelEnv(gym.Env):
         return dict(
             alive=c.alive.copy(), immortal=c.immortal.copy(),
             chars=c.chars.copy(), prefix=c.prefix_len.copy(),
-            age=c.age.copy(), gen=c.generation
+            age=c.age.copy(), gen=c.generation,
+            str_complete=self.str_complete
         )
 
     def _restore(self, s):
@@ -584,6 +585,7 @@ class GOLKeyPixelEnv(gym.Env):
         c.prefix_len[:] = s["prefix"]
         c.age[:]        = s["age"]
         c.generation    = s["gen"]
+        self.str_complete = s["str_complete"]
         self.last_prefix = c.longest_prefix()
 
     # -------- board utils -------------------------------------------
