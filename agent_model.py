@@ -189,7 +189,7 @@ class GOLKeyAgent:
 
                 all_extracted_embeddings.append(chunk_extracted_embeddings)
 
-                print(f"        GOLKeyAgent: Finished embed chunk {i//max_batch + 1} (duration: {time.time() - chunk_start_time:.3f}s)")
+                #print(f"        GOLKeyAgent: Finished embed chunk {i//max_batch + 1} (duration: {time.time() - chunk_start_time:.3f}s)")
 
 
             final_extracted_embeddings = torch.cat(all_extracted_embeddings, dim=0)
