@@ -138,7 +138,7 @@ class GOLKeyAgent:
                 chunk_imgs = imgs[i : i + max_batch]
                 chunk_num_images = chunk_imgs.shape[0]
 
-                print(f"        GOLKeyAgent: Processing embed chunk {i//max_batch + 1}, size {chunk_num_images}...")
+                #print(f"        GOLKeyAgent: Processing embed chunk {i//max_batch + 1}, size {chunk_num_images}...")
                 chunk_start_time = time.time()
 
                 # --- Process this chunk ---
