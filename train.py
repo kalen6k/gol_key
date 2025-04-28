@@ -137,14 +137,14 @@ class VLMExtractor(BaseFeaturesExtractor):
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         # SB3 handles device placement. Pass obs directly to agent's embed.
         # Assuming obs is (B, C, H, W) due to VecTransposeImage
-        print(f"    VLMExtractor: Entering forward...")
+        #print(f"    VLMExtractor: Entering forward...")
         with torch.no_grad():
-            print(f"    VLMExtractor: Calling agent.embed...")
+            #print(f"    VLMExtractor: Calling agent.embed...")
             raw_features = self.agent.embed(obs, max_batch=self.vlm_internal_batch_size)
-            print(f"    VLMExtractor: Returned from agent.embed.")
-        print(f"    VLMExtractor: Calling self.proj...")
+            #print(f"    VLMExtractor: Returned from agent.embed.")
+        #print(f"    VLMExtractor: Calling self.proj...")
         features = self.proj(raw_features.to(torch.float32))
-        print(f"    VLMExtractor: Exiting forward.")
+        #print(f"    VLMExtractor: Exiting forward.")
         return features
 
 # --- Setup Function ---
@@ -163,7 +163,7 @@ def setup_model_and_env(config):
 
     # VLM Agent
     print("Initializing GOLKeyAgent...")
-    vlm_agent = GOLKeyAgent(model_dir=config.MODEL_DIR, device=config.DEVICE)
+    vlm_agent = GOLKeyAgent(model_dir=config.MODEL_DIR)
     print(f"GOLKeyAgent initialized on device: {vlm_agent.device}")
 
     # Create Env

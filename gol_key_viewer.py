@@ -8,6 +8,7 @@ import random
 import argparse
 import torch
 from word_env import load_words
+from train import VLMExtractor
 
 # ─────────────── viewer settings ──────────────── #
 SHAPE        = (32, 32)           # cells
@@ -46,6 +47,12 @@ pygame.display.set_caption("GOL-Key Viewer")
 clock  = pygame.time.Clock()
 font   = pygame.font.SysFont("monospace", CELL_SIZE - 2, bold=True)
 small  = pygame.font.Font(None, 24)
+
+# --- SPS Tracking Init ---
+sps_timer = 0.0
+sps_step_count = 0
+displayed_sps = 0.0
+SPS_UPDATE_INTERVAL = 1.0
 
 paused  = True
 hilite  = False  # triggered by the immortality toggle
@@ -95,17 +102,41 @@ print(f'view_mode is {args.view_mode}')
 auto_reset_armed = False
 AUTOPLAY = args.agent is not None
 STEP_EVENT = pygame.USEREVENT + 1
+
 if AUTOPLAY:
     if args.agent == "random":
         policy = None
         base_agent = None
+        pygame.time.set_timer(STEP_EVENT, int(args.autoplay_interval * 1000))
+        print("Viewer: Using random policy with timer interval.")
+        RANDOM_AGENT_MODE = True
     else:
         from stable_baselines3 import PPO
         from agent_model import GOLKeyAgent
-        base_agent = GOLKeyAgent().to("cpu")
-        policy = PPO.load(args.agent, device="cpu", print_system_info=False)
-    pygame.time.set_timer(STEP_EVENT, int(args.autoplay_interval * 1000))
+        base_agent = GOLKeyAgent()
+        custom_objects = {
+                "policy_kwargs": dict(
+                    features_extractor_class=VLMExtractor,
+                    features_extractor_kwargs=dict(
+                        agent=base_agent,
+                        vlm_internal_batch_size=1,
+                    ),
+                    net_arch=[dict(pi=[1024, 256, 128, 32], vf=[1024, 256, 128, 32])],
+                    ortho_init=False
+                ),
+            }
+        print(f"Viewer: Loading PPO policy '{args.agent}' onto device: {base_agent.device}...")
+        policy = PPO.load(args.agent, device=base_agent.device, custom_objects=custom_objects, print_system_info=False)
+        print("Viewer: PPO policy loaded.")
+        pygame.time.set_timer(STEP_EVENT, 0)
+        RANDOM_AGENT_MODE = False
     paused = False
+
+else:
+    RANDOM_AGENT_MODE = False
+    policy = None
+    base_agent = None
+    pygame.time.set_timer(STEP_EVENT, 0)
 
 TYPE_EVENT   = pygame.USEREVENT + 8      # one char from queue
 AUTO_EVENT   = pygame.USEREVENT + 9
@@ -172,6 +203,8 @@ def draw_ui():
     else:
         elapsed = 0 if start_time is None else int(time.monotonic() - start_time)
         mm, ss = divmod(elapsed, 60)
+    
+    sps_line = f"Agent SPS: {displayed_sps:.1f}" if AUTOPLAY else "Agent SPS: N/A"
 
     # actively mask/reveal TARGET, prefix progress, ...
     if args.view_mode   == 'debug':
@@ -184,6 +217,7 @@ def draw_ui():
             f"Prefix: {prefix_i_given}/{prefix_len_given}",
             f"Time: {mm:02d}:{ss:02d}",
             f"Key-presses: {info['steps']}",
+            sps_line,
             f"Status: {'Running' if not paused else 'Paused'}",
             "",
             "Controls:",
@@ -213,6 +247,7 @@ def draw_ui():
         f"Prefix: {prefix_i_given}/{prefix_len_given}",
         f"Time: {mm:02d}:{ss:02d}",
         f"Key-presses: {info['steps']}",
+        sps_line,
         f"Status: {'Running' if not paused else 'Paused'}",
         "",
         "Controls:",
@@ -285,7 +320,8 @@ def do_env_step(act, guess=None):
     global obs, info, result_mode, paused, last_guess, final_time, final_presses, start_time
     obs, rew, term, trunc, info = env.step(act, guess=guess)
     begin_timer_if_needed()
-    if term or trunc:
+    episode_ended = term or trunc
+    if episode_ended:
         result_mode = "success" if rew > 0 else "fail"
         env._eps  = getattr(env, "_eps", 0)  + (term or trunc)
         env._wins = getattr(env, "_wins", 0) + (rew > 0 and (term or trunc))
@@ -297,14 +333,13 @@ def do_env_step(act, guess=None):
         paused = True
         if result_mode == "success":
             launch_confetti()
-    return term or trunc
+    return episode_ended
 
 def autoplay_step():
     """Return (action_idx, guess_str|None) chosen by policy/random.
        May also schedule fake key events via auto_guess_queue."""
     global auto_guess_queue, guess_mode, paused, last_guess
 
-    # ---- random baseline? ----
     if policy is None:
         act = env.action_space.sample()
     else:
@@ -372,10 +407,12 @@ while running:
             if not auto_guess_queue:
                 pygame.time.set_timer(SUBMIT_EVENT, SUBMIT_MS, loops=1)
             continue
-        if AUTOPLAY and e.type == STEP_EVENT and result_mode is None and not paused:
+        if RANDOM_AGENT_MODE and e.type == STEP_EVENT and result_mode is None and not paused:
             act, guess = autoplay_step()
             if act is not None:
-                do_env_step(act, guess)
+                step_successful = do_env_step(act, guess)
+                if not step_successful:
+                    sps_step_count += 1
             continue
         if result_mode is not None:
             if e.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
@@ -429,6 +466,25 @@ while running:
 
     if not paused:
         last_tick = time.time()
+    
+    if AUTOPLAY and not RANDOM_AGENT_MODE and not paused and result_mode is None:
+        step_start_time = time.monotonic()
+        act, guess = autoplay_step()
+        if act is not None:
+            step_successful = do_env_step(act, guess)
+            step_end_time = time.monotonic()
+            if not step_successful:
+                print(f"Agent step duration: {step_end_time - step_start_time:.3f}s")
+                sps_step_count += 1
+
+    sps_timer += dt
+    if sps_timer >= SPS_UPDATE_INTERVAL:
+        if sps_timer > 0:
+            displayed_sps = sps_step_count / sps_timer
+        else:
+            displayed_sps = 0.0
+        sps_timer = 0.0
+        sps_step_count = 0
 
     draw_grid()
     draw_ui()

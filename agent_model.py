@@ -33,23 +33,19 @@ class GOLKeyAgent:
         self,
         # === Default to BASE model ===
         model_dir: str = "Qwen/Qwen2.5-VL-3B-Instruct",
-        device: str = "cuda",
     ):
         super().__init__()
 
         # --- Determine Device ---
         resolved_device = "cpu"
-        can_use_cuda = device == "cuda" and torch.cuda.is_available()
-        can_use_mps = device == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        can_use_cuda = torch.cuda.is_available()
+        can_use_mps = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
 
         if can_use_cuda:
             resolved_device = "cuda"
         elif can_use_mps:
             resolved_device = "mps"
-        elif device == "cpu":
-            resolved_device = "cpu"
         else:
-            print(f"Warning: Requested device '{device}' not available. Using CPU.")
             resolved_device = "cpu"
         self.device = torch.device(resolved_device)
         print(f"GOLKeyAgent: Using device: {self.device}")
