@@ -516,11 +516,23 @@ class GOLKeyPixelEnv(gym.Env):
 
         # ─────────────────── CLEAR & RANDOM ─────────────────────────
         elif action == self.IDX_CLEAR:
+            penalty_for_lost_state = 0
+            if self.str_complete:
+                penalty_for_lost_state += self.rw_str_done
+            if self.last_prefix > 0:
+                penalty_for_lost_state += self.rw_prefix * self.last_prefix
+            reward -= penalty_for_lost_state
             self.history.append(self._snap())
             self.redo_buf.clear()
             self._clear_board()
 
         elif action == self.IDX_RANDOM:
+            penalty_for_lost_state = 0
+            if self.str_complete:
+                penalty_for_lost_state += self.rw_str_done
+            if self.last_prefix > 0:
+                penalty_for_lost_state += self.rw_prefix * self.last_prefix
+            reward -= penalty_for_lost_state
             self.history.append(self._snap())
             self.redo_buf.clear()
             self._random_board()
@@ -554,19 +566,23 @@ class GOLKeyPixelEnv(gym.Env):
             self.history.append(self._snap())
             self.redo_buf.clear()
 
+            prefix_before_step = self.last_prefix
+            was_complete_before_step = self.str_complete
+
             typed = None if action == self.IDX_SPACE else LETTERS[action]
             self.core.step(typed)
 
-            cur_pref = self.core.longest_prefix()
-            if cur_pref > self.last_prefix:
-                reward += self.rw_prefix * (cur_pref - self.last_prefix)
-                self.last_prefix = cur_pref
-                if self.core.done():
-                    reward    += self.rw_str_done
-                    self.str_complete = True
-            elif cur_pref < self.last_prefix:
-                reward -= self.rw_prefix  * (self.last_prefix - cur_pref)
-                self.last_prefix = cur_pref
+            prefix_after_step = self.core.longest_prefix()
+            is_complete_after_step = self.core.done()
+
+            self.last_prefix = prefix_after_step
+
+            if prefix_after_step > prefix_before_step:
+                reward += self.rw_prefix * (prefix_after_step - prefix_before_step)
+
+            if is_complete_after_step and not was_complete_before_step:
+                reward += self.rw_str_done
+                self.str_complete = True
 
         # ─────────────────── bookkeeping / truncation ───────────────
         self.step_count += 1
