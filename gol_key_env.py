@@ -489,15 +489,25 @@ class GOLKeyPixelEnv(gym.Env):
         # ─────────────────── time‑travel  ← / → ────────────────────
         if action == self.IDX_BACK:
             if self.history:
-                self.redo_buf.append(self._snap())
-                last_prefix_len = self.last_prefix
-                self._restore(self.history.pop())
-                # check to see if the prefix length has shrunk
-                if self.str_complete and last_prefix_len > self.last_prefix:
-                    reward -= (self.rw_str_done + self.rw_prefix)
-                    self.str_complete = False
-                elif last_prefix_len > self.last_prefix:
-                    reward -= self.rw_prefix
+                state_before_rewind = self._snap()
+                self.redo_buf.append(state_before_rewind)
+                prefix_before_rewind = self.last_prefix
+
+                saved_state_dict = self.history.pop()
+                self._restore(saved_state_dict)
+
+                was_complete_before_rewind = state_before_rewind["str_complete"]
+                is_complete_after_rewind = self.str_complete
+
+                prefix_after_rewind = self.last_prefix
+
+                if was_complete_before_rewind and not is_complete_after_rewind:
+                    reward -= self.rw_str_done
+                
+                if prefix_before_rewind > prefix_after_rewind:
+                    prefix_diff = prefix_before_rewind - prefix_after_rewind
+                    penalty = self.rw_prefix * prefix_diff
+                    reward -= penalty
 
         elif action == self.IDX_FWD:
             if self.redo_buf:
