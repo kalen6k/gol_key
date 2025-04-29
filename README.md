@@ -138,6 +138,7 @@ graph TD
 | Implement **benchmark adapters** for external vision‑LLM APIs (OpenAI, Gemini, Claude). Each adapter will accept an RGB frame and emit one keypress at a time, plus a final guess:<word> when confident. No training or embedding access required — purely zero‑shot evaluation. |
 | Add more sophisticated RL techniques, pass more frames as state, ...|
 | Experiment with different VLM backbones or feature extraction layers/methods.|
+| Add an LR scheduler.|
 | Perform systematic evaluation of agent performance vs word length, grid size, etc.|
 
 ---
