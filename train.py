@@ -33,7 +33,7 @@ except ImportError:
 # Project imports
 from agent_model import GOLKeyAgent
 from word_env import WordTargetWrapper
-from callbacks import LengthCurriculumCallback, SuccessRateCallback
+from callbacks import LengthCurriculumCallback, SuccessRateCallback, PromptHintCallback
 from huggingface_hub import snapshot_download
 
 # --- Default Config ---
@@ -66,6 +66,8 @@ DEFAULT_CONFIG = dict(
     # Curriculum Params
     CURRICULUM_TARGET_SUCCESS = 0.5,
     CURRICULUM_WINDOW = 1000,
+    MAX_LEN_LIMIT = 8,
+    PROMPT_HINT_TARGET_SUCCESS = 0.75,
 )
 
 # --- Configuration Loading ---
@@ -98,14 +100,11 @@ def load_config(config_path_override=None):
         print(f"Warning: Config file '{config_to_load}' not found.")
     else: print("Using default config.")
 
-    # Merge order: Defaults -> File Config -> CLI Args
     final_config = DEFAULT_CONFIG.copy()
     final_config.update(cfg_file_vars)
     if args.total_steps is not None:
         final_config['TOTAL_STEPS'] = args.total_steps
-    # Apply other CLI overrides here
-
-    # Convert to an object for dot access
+    
     class ConfigObject:
         def __init__(self, dictionary):
             self.__dict__.update(dictionary)
@@ -116,8 +115,7 @@ def load_config(config_path_override=None):
     config_obj.wandb_off = args.wandb_off
     config_obj.config_file_path = config_to_load
 
-    # validation
-    essential_keys = ['N_ENVS', 'N_STEPS', 'DEVICE', 'TOTAL_STEPS', 'MODEL_DIR', 'LR', 'BATCH']
+    essential_keys = ['N_ENVS', 'N_STEPS', 'DEVICE', 'TOTAL_STEPS', 'MODEL_DIR', 'LR', 'BATCH', 'MAX_LEN_LIMIT']
     missing = [k for k in essential_keys if getattr(config_obj, k, None) is None]
     if missing:
          raise ValueError(f"Missing essential config keys: {missing}")
@@ -152,7 +150,6 @@ def setup_model_and_env(config):
     """Initializes VLM agent, environment, and PPO model."""
     print(f"--- Running Setup (Device: {config.DEVICE}) ---")
 
-    # Download model if needed
     model_path = Path(config.MODEL_DIR)
     if not model_path.exists():
         print(f"Downloading {config.MODEL_DIR}...")
@@ -180,7 +177,7 @@ def setup_model_and_env(config):
         n_envs = config.N_ENVS,
         seed = config.SEED,
     )
-    vec_env = VecTransposeImage(vec_env) # Ensure (B, C, H, W) observations
+    vec_env = VecTransposeImage(vec_env)
     print(f"Observation space: {vec_env.observation_space.shape}")
 
     # Policy Kwargs
@@ -260,20 +257,27 @@ if __name__ == "__main__":
     # Setup callbacks
     callbacks = []
     if use_wandb and run is not None:
-         save_path = f"models/{run.name}" # Save models in a run-specific folder
+         save_path = f"models/{run.name}"
          os.makedirs(save_path, exist_ok=True)
          print(f"Adding WandbCallback (Save Freq: {C.SAVE_EVERY}, Path: {save_path})")
          callbacks.append(WandbCallback(model_save_freq=C.SAVE_EVERY,
                                         model_save_path=save_path,
-                                        verbose=1)) # WandbCallback verbose=1 shows save messages
+                                        verbose=1))
 
     print("Adding LengthCurriculumCallback.")
     callbacks.append(LengthCurriculumCallback(target_success=C.CURRICULUM_TARGET_SUCCESS,
                                               window=C.CURRICULUM_WINDOW,
-                                              verbose=1)) # Callback verbose=1 shows curriculum changes
+                                              max_len_limit=C.MAX_LEN_LIMIT,
+                                              verbose=1))
     
     print("Adding SuccessRateCallback.")
     callbacks.append(SuccessRateCallback(window_size=24, verbose=1))
+
+    print("Adding PromptHintCallback.")
+    callbacks.append(PromptHintCallback(target_success=C.PROMPT_HINT_TARGET_SUCCESS,
+                                        window=C.CURRICULUM_WINDOW,
+                                        max_len_limit=C.MAX_LEN_LIMIT,
+                                        verbose=1))
 
     # --- Start training ---
     start_time = time.time()
@@ -316,7 +320,7 @@ if __name__ == "__main__":
         except Exception as save_e:
             print(f"Error saving final model: {save_e}")
 
-        # Close environment
+        # env close
         print("Closing environment...")
         try:
             vec_env.close()

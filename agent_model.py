@@ -35,7 +35,7 @@ class GOLKeyAgent:
         model_dir: str = "Qwen/Qwen2.5-VL-3B-Instruct",
     ):
         super().__init__()
-
+        self.use_length_hint = True
         # --- Determine Device ---
         resolved_device = "cpu"
         can_use_cuda = torch.cuda.is_available()
@@ -213,7 +213,10 @@ class GOLKeyAgent:
             image_tensor_permuted = (image_tensor_permuted * 255)
         pil_image = Image.fromarray(image_tensor_permuted.cpu().numpy().astype(np.uint8))
 
-        dynamic_prompt = f"{PROMPT} The target string has {target_len} letters."
+        if self.use_length_hint:
+            dynamic_prompt = f"{PROMPT} The target string has {target_len} letters."
+        else:
+            dynamic_prompt = PROMPT
 
         messages = [
             {"role": "user", "content": [
@@ -225,9 +228,13 @@ class GOLKeyAgent:
         try:
             prompt_text = self.processor.apply_chat_template(
                 messages,
-                tokenize=False,
+                padding=True,
+                truncation=True,
+                tokenize=True,
+                return_tensors="pt",
+                return_dict=True,
                 add_generation_prompt=True
-            )
+            ).to(self.device)
             images_to_process = [pil_image]
 
             inputs = self.processor(
