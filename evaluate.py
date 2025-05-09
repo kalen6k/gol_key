@@ -20,7 +20,7 @@ class VLMExtractor(BaseFeaturesExtractor):
     """ Custom feature extractor using the GOLKeyAgent's embed method. """
     def __init__(self, observation_space, agent: "GOLKeyAgent", vlm_internal_batch_size: int):
         super().__init__(observation_space, features_dim=agent.intermediate_state)
-        self.agent_for_embed = agent
+        self.agent = agent
         if not hasattr(agent, 'patch_dim') or not hasattr(agent, 'intermediate_state'):
             raise ValueError("The GOLKeyAgent instance provided to VLMExtractor during load "
                              "is missing 'patch_dim' or 'intermediate_state'. "
@@ -29,7 +29,7 @@ class VLMExtractor(BaseFeaturesExtractor):
         self.proj = torch.nn.Linear(agent.patch_dim, agent.intermediate_state)
         self.proj = agent.proj
         self.vlm_internal_batch_size = vlm_internal_batch_size
-        print(f"VLMExtractor Initialized. Agent for embed (initially unpickled): {id(self.agent_for_embed)}, "
+        print(f"VLMExtractor Initialized. Agent for embed (initially unpickled): {id(self.agent)}, "
               f"Proj (created, for SB3 to load weights into): {id(self.proj)}, "
               f"Features Dim: {self.features_dim}")
         
@@ -108,12 +108,12 @@ def evaluate_model_vec_batched(config):
        getattr(actual_extractor.__class__, '__name__', None) == 'VLMExtractor':
         print("  SUCCESS: Loaded model's feature extractor IS a VLMExtractor (by class name).")
         
-        print(f"    Actual_extractor.agent_for_embed (unpickled by SB3): {type(actual_extractor.agent_for_embed)}, ID: {id(actual_extractor.agent_for_embed)}")
+        print(f"    Actual_extractor.agent (unpickled by SB3): {type(actual_extractor.agent)}, ID: {id(actual_extractor.agent)}")
         print(f"    Actual_extractor.proj (weights loaded by SB3): {type(actual_extractor.proj)}, ID: {id(actual_extractor.proj)}, Device: {actual_extractor.proj.weight.device}")
 
         print(f"    Reconfiguring the VLM components of the extractor's internal agent...")
         
-        unpickled_agent_in_extractor = actual_extractor.agent_for_embed
+        unpickled_agent_in_extractor = actual_extractor.agent
         
         unpickled_agent_in_extractor.model = live_vlm_provider.model
         unpickled_agent_in_extractor.tokenizer = live_vlm_provider.tokenizer
