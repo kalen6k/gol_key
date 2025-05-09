@@ -148,7 +148,7 @@ def evaluate_model_vec_batched(config):
     if actual_extractor is not None and actual_class_name == expected_class_name:
         print(f"  SUCCESS: Loaded model's feature extractor IS a {expected_class_name} (by class name).")
          
-        unpickled_agent_in_extractor = actual_extractor.agent_for_embed 
+        unpickled_agent_in_extractor = actual_extractor.agent
         
         print(f"    Actual_extractor's unpickled agent_for_embed: {type(unpickled_agent_in_extractor)}, ID: {id(unpickled_agent_in_extractor)}")
         print(f"    Actual_extractor's proj layer (weights loaded by SB3): {type(actual_extractor.proj)}, ID: {id(actual_extractor.proj)}, Device: {actual_extractor.proj.weight.device}")
