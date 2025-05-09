@@ -10,11 +10,25 @@ import pandas as pd
 from tqdm import tqdm
 
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import VecTransposeImage, DummyVecEnv
+from stable_baselines3.common.vec_env import VecTransposeImage, DummyVecEnv, BaseFeaturesExtractor
 
 from agent_model import GOLKeyAgent
 from word_env import WordTargetWrapper
-from train import VLMExtractor
+
+class VLMExtractor(BaseFeaturesExtractor):
+    """ Custom feature extractor using the GOLKeyAgent's embed method. """
+    def __init__(self, observation_space, agent: "GOLKeyAgent", vlm_internal_batch_size: int):
+        super().__init__(observation_space, features_dim=agent.intermediate_state)
+        self.agent = agent
+        self.proj = agent.proj
+        self.vlm_internal_batch_size = vlm_internal_batch_size
+        # print(f"VLMExtractor Initialized: Features Dim = {agent.intermediate_state}")
+
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        with torch.no_grad():
+            raw_features = self.agent.embed(obs, max_batch=self.vlm_internal_batch_size)
+        features = self.proj(raw_features.to(torch.float32))
+        return features
 
 def load_eval_config():
     parser = argparse.ArgumentParser(description="Evaluate GOLKey Agent (Batched)")
@@ -65,7 +79,13 @@ def evaluate_model_vec_batched(config):
 
     policy_kwargs_for_load = dict(
         features_extractor_class=VLMExtractor,
-        features_extractor_kwargs=dict(agent=shared_vlm_agent, vlm_internal_batch_size=config.vlm_internal_batch_size_eval),
+        features_extractor_kwargs=dict(
+            agent=shared_vlm_agent,
+            vlm_internal_batch_size=config.vlm_internal_batch_size_eval
+        ),
+        net_arch=[dict(pi=[1024, 256, 128, 32],
+                       vf=[1024, 256, 128, 32])],
+        ortho_init=(config.device.lower() != "cpu")
     )
     loaded_model = PPO.load(
         config.model_path, device=config.device, env=eval_vec_env,
@@ -102,10 +122,20 @@ def evaluate_model_vec_batched(config):
     active_envs_mask = [word is not None for word in current_word_for_env]
     num_active_envs = sum(active_envs_mask)
 
+    print(f"\nInitialization complete. Starting evaluation loop for {num_total_words_to_test} words...")
+    print(f"Initial words assigned to envs: {current_word_for_env[:config.n_eval_envs]}")
+    print(f"Number of initially active envs: {num_active_envs}\n")
+
     pbar = tqdm(total=num_total_words_to_test, desc="Evaluating words")
+
+    steps_taken_in_loop = 0
+    max_initial_steps_to_log = 5 
 
     while len(results) < num_total_words_to_test:
         if num_active_envs == 0: break
+
+        if steps_taken_in_loop < max_initial_steps_to_log:
+            print(f"  Loop iteration {steps_taken_in_loop + 1}, num_active_envs: {num_active_envs}, results collected: {len(results)}")
 
         actions, _ = loaded_model.predict(obs, deterministic=True)
         next_obs, step_rewards, dones, infos = eval_vec_env.step(actions)
@@ -118,6 +148,8 @@ def evaluate_model_vec_batched(config):
 
 
             if dones[i]:
+                if steps_taken_in_loop < max_initial_steps_to_log * config.n_eval_envs or len(results) % 10 == 0 : # Log first few dones or every 10th
+                    print(f"    Env {i} finished episode for word '{current_word_for_env[i]}'. Success: {infos[i].get('success', False)}. Results: {len(results)+1}/{num_total_words_to_test}")
                 processed_word = current_word_for_env[i]
                 if processed_word:
                     results.append({
