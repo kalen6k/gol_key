@@ -85,7 +85,7 @@ def evaluate_model_vec_batched(config):
             vlm_internal_batch_size=config.vlm_internal_batch_size_eval
         ),
         net_arch=dict(pi=[1024, 256, 128, 32],
-                      vf=[1024, 256, 128, 32])
+                      vf=[1024, 256, 128, 32]),
         ortho_init=(config.device.lower() != "cpu")
     )
     loaded_model = PPO.load(
