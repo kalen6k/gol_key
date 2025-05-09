@@ -26,11 +26,12 @@ class WordTargetWrapper(gym.Wrapper):
 
         self.min_len = min_len
         self._max_len = max_len
-        self._update_word_pool()
 
         self.is_eval_mode = False
         self._eval_next_target_word = None
         self._eval_word_list_override_active = False
+
+        self._update_word_pool()
 
 
     @property
