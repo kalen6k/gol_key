@@ -95,7 +95,6 @@ def evaluate_model_vec_batched(config):
         "__main__.VLMExtractor": VLMExtractor 
     }
 
-    print("Attempting to load model WITHOUT explicit policy_kwargs...")
     loaded_model = PPO.load(
         config.model_path, 
         device=config.device, 
