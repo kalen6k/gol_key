@@ -137,18 +137,18 @@ def evaluate_model_vec_batched(config):
         actual_extractor = loaded_model.policy.features_extractor
     else:
         print("CRITICAL: Loaded model's policy does not have a features_extractor attribute.")
+        # Clean up global ref before returning
+        _live_vlm_for_extractor_dims_ref = None
         return
 
-    if actual_extractor is not None and \
-       isinstance(actual_extractor, VLMExtractor): # Check by instance type
-        print("  SUCCESS: Loaded model's feature extractor IS a VLMExtractor (by type).")
-        
-        # The agent inside the extractor is the one unpickled by SB3.
-        # We need to replace its VLM components (model, tokenizer, processor)
-        # with those from our 'live_vlm_provider'.
-        # The 'proj' layer of actual_extractor is its own, and SB3 loaded weights into it.
-        
-        unpickled_agent_in_extractor = actual_extractor.agent_for_embed # Using the new name
+    # More robust check for when the class is defined in __main__
+    expected_class_name = "VLMExtractor"
+    actual_class_name = getattr(actual_extractor.__class__, '__name__', None)
+
+    if actual_extractor is not None and actual_class_name == expected_class_name:
+        print(f"  SUCCESS: Loaded model's feature extractor IS a {expected_class_name} (by class name).")
+         
+        unpickled_agent_in_extractor = actual_extractor.agent_for_embed 
         
         print(f"    Actual_extractor's unpickled agent_for_embed: {type(unpickled_agent_in_extractor)}, ID: {id(unpickled_agent_in_extractor)}")
         print(f"    Actual_extractor's proj layer (weights loaded by SB3): {type(actual_extractor.proj)}, ID: {id(actual_extractor.proj)}, Device: {actual_extractor.proj.weight.device}")
@@ -157,8 +157,7 @@ def evaluate_model_vec_batched(config):
         unpickled_agent_in_extractor.model = live_vlm_provider.model
         unpickled_agent_in_extractor.tokenizer = live_vlm_provider.tokenizer
         unpickled_agent_in_extractor.processor = live_vlm_provider.processor
-        unpickled_agent_in_extractor.device = live_vlm_provider.device # Ensure device consistency
-        # The unpickled_agent_in_extractor.proj layer is NOT used by actual_extractor.forward, so it's okay.
+        unpickled_agent_in_extractor.device = live_vlm_provider.device 
         
         print(f"    Reconfiguration complete. Extractor will use:")
         print(f"        VLM components from live_vlm_provider (Model ID: {id(unpickled_agent_in_extractor.model)})")
@@ -170,11 +169,13 @@ def evaluate_model_vec_batched(config):
             print("    Warning: actual_extractor does not have 'vlm_internal_batch_size'. Check VLMExtractor definition.")
 
     else:
-        print(f"  CRITICAL WARNING: Loaded model's feature extractor is NOT a VLMExtractor as expected.")
+        print(f"  CRITICAL WARNING: Loaded model's feature extractor is NOT a {expected_class_name} as expected.")
         print(f"     Actual extractor type: {type(actual_extractor)}")
+        print(f"     Actual extractor class name: {actual_class_name}")
+        # Clean up global ref before returning
+        _live_vlm_for_extractor_dims_ref = None
         return 
-    
-    # ... (rest of the evaluation loop from your original evaluate.py) ...
+        
     print("\n--- Post-load VLMExtractor Configuration Check ---")
     print(f"Extractor Type: {type(loaded_model.policy.features_extractor)}")
     if isinstance(loaded_model.policy.features_extractor, VLMExtractor):
