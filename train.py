@@ -196,6 +196,14 @@ def setup_model_and_env(config):
     )
     if config.RESAVE_LIGHT_FROM:
         print(f"Loading existing PPO model from: {config.RESAVE_LIGHT_FROM}")
+        def constant_lr_schedule(progress_remaining: float) -> float:
+            return config.LR
+
+        def constant_clip_schedule(progress_remaining: float) -> float:
+            return config.CLIP_RANGE
+
+        print(f"DEBUG: Using LR={config.LR} and CLIP_RANGE={config.CLIP_RANGE} for potential schedule reconstruction.")
+
         ppo_model = PPO.load(
             config.RESAVE_LIGHT_FROM,
             env=vec_env,
@@ -207,6 +215,10 @@ def setup_model_and_env(config):
             }
         )
         print("PPO model loaded.")
+        if ppo_model.lr_schedule is None or not callable(ppo_model.lr_schedule):
+            print(f"WARNING: ppo_model.lr_schedule is {ppo_model.lr_schedule}. This might be an issue.")
+        if ppo_model.clip_range is None or not callable(ppo_model.clip_range):
+            print(f"WARNING: ppo_model.clip_range is {ppo_model.clip_range}. This might be an issue.")
     else:
         # PPO Model
         print("Initializing PPO model...")
