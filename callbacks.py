@@ -15,7 +15,7 @@ class LengthCurriculumCallback(BaseCallback):
     def __init__(self, target_success=0.5, window=250, verbose=1, max_len_limit=8):
         super().__init__(verbose)
         self.targ = target_success
-        self.win  = window
+        self.window_size  = window
         self.history = deque(maxlen=self.window_size)
         self.max_len_limit = max_len_limit
 
@@ -27,7 +27,7 @@ class LengthCurriculumCallback(BaseCallback):
                 outcome = info.get("success", 0)
                 self.history.append(outcome)
 
-        if len(self.history) < self.win:
+        if len(self.history) < self.window_size:
             return True
 
         rate = np.mean(list(self.history))
