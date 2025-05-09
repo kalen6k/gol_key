@@ -197,23 +197,35 @@ def evaluate_model_vec_batched(config):
             current_episode_rewards[i] += step_rewards[i]
             current_episode_steps[i] += 1
 
-
             if dones[i]:
                 num_completed_overall = len(results)
-                if num_completed_overall < 5 or (num_completed_overall + 1) % 10 == 0 : 
-                    print(f"    Env {i} finished episode for word '{current_word_for_env[i]}'. Success: {infos[i].get('success', False)}. Total Results: {num_completed_overall + 1}/{num_total_words_to_test}")
-                processed_word = current_word_for_env[i]
-                if processed_word:
+                processed_word = current_word_for_env[i] # Word for this episode
+                episode_success = infos[i].get('success', False)
+                episode_final_reward = current_episode_rewards[i] # Final reward for this episode
+                episode_total_steps = current_episode_steps[i]    # Total steps for this episode
+                episode_final_prefix = infos[i].get('prefix', 0)
+
+                # Modified print statement
+                if num_completed_overall < 10 or (num_completed_overall + 1) % 50 == 0 : # Log first 10, then every 50th
+                    print(f"    Env {i}: Word '{processed_word}' | "
+                          f"Success: {episode_success} | "
+                          f"Steps: {episode_total_steps} | "
+                          f"Reward: {episode_final_reward:.2f} | "
+                          f"Prefix: {episode_final_prefix} | "
+                          f"Total Results: {num_completed_overall + 1}/{num_total_words_to_test}")
+                
+                if processed_word: # Should always be true if active_envs_mask[i] was true
                     results.append({
                         'target_word': processed_word,
                         'word_len': len(processed_word),
-                        'success': infos[i].get('success', False),
-                        'steps': current_episode_steps[i],
-                        'reward': current_episode_rewards[i],
-                        'final_prefix': infos[i].get('prefix', 0)
+                        'success': episode_success,
+                        'steps': episode_total_steps,
+                        'reward': episode_final_reward,
+                        'final_prefix': episode_final_prefix
                     })
                     pbar.update(1)
                 
+                # Reset episodic trackers for this environment
                 current_episode_rewards[i] = 0
                 current_episode_steps[i] = 0
 
