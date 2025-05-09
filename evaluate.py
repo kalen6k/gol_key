@@ -59,7 +59,8 @@ def evaluate_model_vec_batched(config):
     print(f"--- Starting Batched Vectorized Evaluation ---")
     print(f"Model: {config.model_path}, Test Words: {config.test_word_file}, Envs: {config.n_eval_envs}")
 
-    shared_vlm_agent = GOLKeyAgent(model_dir=config.model_dir_vlm)
+    print("Initializing GOLKeyAgent (for its VLM model component)...")
+    vlm_for_embeddings = GOLKeyAgent(model_dir=config.model_dir_vlm)
 
     with open(config.test_word_file, 'r') as f:
         all_test_words = [line.strip() for line in f if line.strip() and len(line.strip()) >=3 and len(line.strip()) <=8]
@@ -68,7 +69,7 @@ def evaluate_model_vec_batched(config):
         print("No test words. Exiting."); return
     print(f"Loaded {num_total_words_to_test} test words.")
     
-    env_fns = [make_env_fn_eval(i, i + 420, config.test_word_file, config.GRID_SHAPE, config.env_max_steps, shared_vlm_agent) for i in range(config.n_eval_envs)]
+    env_fns = [make_env_fn_eval(i, i + 420, config.test_word_file, config.GRID_SHAPE, config.env_max_steps, vlm_for_embeddings) for i in range(config.n_eval_envs)]
     eval_vec_env = DummyVecEnv(env_fns)
     eval_vec_env = VecTransposeImage(eval_vec_env)
 
@@ -81,11 +82,10 @@ def evaluate_model_vec_batched(config):
     policy_kwargs_for_load = dict(
         features_extractor_class=VLMExtractor,
         features_extractor_kwargs=dict(
-            agent=shared_vlm_agent, 
+            agent=vlm_for_embeddings,
             vlm_internal_batch_size=config.vlm_internal_batch_size_eval
         ),
-        net_arch=dict(pi=[1024, 256, 128, 32],
-                      vf=[1024, 256, 128, 32]),
+        net_arch=dict(pi=[1024, 256, 128, 32], vf=[1024, 256, 128, 32]),
         ortho_init=(config.device.lower() != "cpu")
     )
 
@@ -95,32 +95,51 @@ def evaluate_model_vec_batched(config):
         "__main__.VLMExtractor": VLMExtractor 
     }
 
+    print("Attempting to load PPO model...")
     loaded_model = PPO.load(
         config.model_path, 
         device=config.device, 
-        env=eval_vec_env, # env is often important for space inference
+        env=eval_vec_env,
         custom_objects=custom_objects_for_load,
         policy_kwargs_for_load=policy_kwargs_for_load
     )
     print("PPO model loaded.")
-    if hasattr(loaded_model.policy, 'features_extractor') and \
-       isinstance(loaded_model.policy.features_extractor, VLMExtractor):
-        print("  SUCCESS: Loaded model IS using the expected VLMExtractor type.")
-        # Verify the agent instance is the one we passed if possible (can be tricky due to pickling)
-        if loaded_model.policy.features_extractor.agent is shared_vlm_agent:
-            print("  SUCCESS: VLMExtractor is using the shared_vlm_agent instance directly.")
-        else:
-            print("  INFO: VLMExtractor is using an agent instance. (This is okay if it's functionally equivalent due to pickling/unpickling of kwargs).")
-            loaded_model.policy.features_extractor.agent.model = shared_vlm_agent.model
-            loaded_model.policy.features_extractor.agent.proj = shared_vlm_agent.proj
-            loaded_model.policy.features_extractor.proj = shared_vlm_agent.proj
-            loaded_model.policy.features_extractor.agent.device = shared_vlm_agent.device
-            loaded_model.policy.features_extractor.agent.model.to(shared_vlm_agent.device)
-            loaded_model.policy.features_extractor.agent.proj.to(shared_vlm_agent.device)
-    else:
-        print("WARNING: Loaded model does NOT have the expected VLMExtractor type even after providing policy_kwargs.")
-        print(f"     Actual extractor type: {type(loaded_model.policy.features_extractor)}")
+    
+    actual_extractor = None
+    if hasattr(loaded_model.policy, 'features_extractor'):
+        actual_extractor = loaded_model.policy.features_extractor
+    
+    if actual_extractor is not None and isinstance(actual_extractor, VLMExtractor):
+        print("  SUCCESS: Loaded model has a VLMExtractor.")
+        print(f"    Original extractor agent was: {type(actual_extractor.agent)}")
+        print(f"    Setting extractor's agent to use the VLM model from vlm_for_embeddings, but keeping loaded proj layer.")
 
+        actual_extractor.agent = vlm_for_embeddings
+        
+        print(f"    Loaded VLMExtractor's 'proj' layer is on device: {actual_extractor.proj.weight.device}")
+        if actual_extractor.proj.weight.device != torch.device(config.device):
+            print(f"    Moving loaded 'proj' layer to {config.device}")
+            actual_extractor.proj.to(torch.device(config.device))
+
+        actual_extractor.vlm_internal_batch_size = config.vlm_internal_batch_size_eval
+
+        print(f"    VLMExtractor now configured to use VLM from vlm_for_embeddings (device: {vlm_for_embeddings.device}) "
+              f"and its loaded+trained projection layer (device: {actual_extractor.proj.weight.device}).")
+    else:
+        print(f"  CRITICAL WARNING: Loaded model's feature extractor is not a VLMExtractor. Type: {type(actual_extractor)}")
+        print("     Evaluation results will be meaningless. Exiting.")
+        return
+    
+    print("\n--- Post-load VLMExtractor Configuration Check ---")
+    print(f"Extractor Type: {type(loaded_model.policy.features_extractor)}")
+    if isinstance(loaded_model.policy.features_extractor, VLMExtractor):
+        print(f"Extractor Agent Type: {type(loaded_model.policy.features_extractor.agent)}")
+        print(f"Extractor Agent's VLM Model: {type(loaded_model.policy.features_extractor.agent.model)}")
+        print(f"Extractor Agent's Proj (GOLKeyAgent's own): {type(loaded_model.policy.features_extractor.agent.proj)}")
+        print(f"Extractor's Own Proj (used in forward): {type(loaded_model.policy.features_extractor.proj)}")
+        print(f"Extractor's Proj Device: {loaded_model.policy.features_extractor.proj.weight.device}")
+        print(f"Extractor Agent Device: {loaded_model.policy.features_extractor.agent.device}")
+    print(f"PPO Policy Device: {loaded_model.policy.device}\n")
 
     if hasattr(loaded_model.policy.features_extractor, 'agent') and \
        isinstance(loaded_model.policy.features_extractor.agent, GOLKeyAgent):
