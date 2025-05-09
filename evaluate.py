@@ -78,27 +78,58 @@ def evaluate_model_vec_batched(config):
     else:
         eval_vec_env.env_method("set_eval_mode", True, indices=list(range(config.n_eval_envs)))
 
-    policy_kwargs_for_load = dict(
-        features_extractor_class=VLMExtractor,
-        features_extractor_kwargs=dict(
-            agent=shared_vlm_agent,
-            vlm_internal_batch_size=config.vlm_internal_batch_size_eval
-        ),
-        net_arch=dict(pi=[1024, 256, 128, 32],
-                      vf=[1024, 256, 128, 32]),
-        ortho_init=(config.device.lower() != "cpu")
-    )
+    # policy_kwargs_for_load = dict(
+    #     features_extractor_class=VLMExtractor,
+    #     features_extractor_kwargs=dict(
+    #         agent=shared_vlm_agent,
+    #         vlm_internal_batch_size=config.vlm_internal_batch_size_eval
+    #     ),
+    #     net_arch=dict(pi=[1024, 256, 128, 32],
+    #                   vf=[1024, 256, 128, 32]),
+    #     ortho_init=(config.device.lower() != "cpu")
+    # )
+    print("Attempting to load model WITHOUT explicit policy_kwargs...")
     loaded_model = PPO.load(
-        config.model_path, device=config.device, env=eval_vec_env,
-        custom_objects={"learning_rate": 0.0003, "clip_range": 0.2},
-        policy_kwargs=policy_kwargs_for_load
+        config.model_path, 
+        device=config.device, 
+        env=eval_vec_env, # env is often important for space inference
+        custom_objects={
+            "learning_rate": 0.0003, "clip_range": 0.2,
+        }
     )
     print("PPO model loaded.")
     if hasattr(loaded_model.policy.features_extractor, 'agent') and \
-       loaded_model.policy.features_extractor.agent.device != torch.device(config.device):
-        loaded_model.policy.features_extractor.agent.to(torch.device(config.device))
-        loaded_model.policy.features_extractor.proj.to(torch.device(config.device))
+       isinstance(loaded_model.policy.features_extractor, VLMExtractor):
+        print("Manually setting agent for loaded VLMExtractor...")
+        loaded_model.policy.features_extractor.agent = shared_vlm_agent
+        loaded_model.policy.features_extractor.proj = shared_vlm_agent.proj
+        loaded_model.policy.features_extractor.vlm_internal_batch_size = config.vlm_internal_batch_size_eval
+        expected_features_dim = shared_vlm_agent.intermediate_state
+        if loaded_model.policy.features_extractor.features_dim != expected_features_dim:
+            print(f"Warning: Loaded VLMExtractor features_dim {loaded_model.policy.features_extractor.features_dim} "
+                  f"does not match current agent's intermediate_state {expected_features_dim}. Re-initializing proj might be needed if not done by SB3.")
+            
+    else:
+        print("Warning: Loaded model does not have expected VLMExtractor.")
 
+
+    if hasattr(loaded_model.policy.features_extractor, 'agent') and \
+       isinstance(loaded_model.policy.features_extractor.agent, GOLKeyAgent): # Ensure it's our agent type
+        
+        vlm_device = loaded_model.policy.features_extractor.agent.device
+        ppo_policy_device = loaded_model.policy.device # Device of the PPO policy's networks
+
+        print(f"  INFO: VLM (GOLKeyAgent) is operating on device: {vlm_device}")
+        print(f"  INFO: PPO policy networks are on device: {ppo_policy_device}")
+
+        if vlm_device != ppo_policy_device:
+            print(f"  WARNING: Device mismatch! VLM device ({vlm_device}) and PPO policy device ({ppo_policy_device}) differ.")
+            print(f"           Data will be transferred between devices during forward passes. This is functional but may impact performance.")
+            print(f"           - Observations (on {ppo_policy_device}) will be moved to {vlm_device} for VLM embedding.")
+            print(f"           - Extracted features (on {vlm_device}) will be moved to {ppo_policy_device} for PPO MLPs.")
+        else:
+            print(f"  INFO: VLM and PPO policy devices match ({vlm_device}). Ready")
+    
     results = []
     next_word_idx = 0
     current_word_for_env = [None] * config.n_eval_envs
