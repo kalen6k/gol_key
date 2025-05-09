@@ -23,9 +23,9 @@ COLORS = [
 POOL = [w for w in load_words("train_words.txt")]
 def next_target():
     return random.choice(POOL)
-TARGET = next_target()
+TARGET = "learn"
 
-env = GOLKeyPixelEnv(target=next_target(), shape=SHAPE)
+env = GOLKeyPixelEnv(target=TARGET, shape=SHAPE)
 obs, info = env.reset()
 H, W = SHAPE
 SIDE_PANEL_W = 280

@@ -58,6 +58,7 @@ DEFAULT_CONFIG = dict(
     WORD_FILE   = "train_words.txt",
     MIN_WORD_LEN= 3,
     MAX_WORD_LEN= 3,
+    RESAVE_LIGHT_FROM = None,
     # System/Logging Params
     SAVE_EVERY  = 25_000,
     SEED        = 42,
@@ -80,6 +81,8 @@ def load_config(config_path_override=None):
                        help="Disable Weights-&-Biases logging.")
     parser.add_argument("--total_steps", type=int, default=None,
                         help="Override TOTAL_STEPS config.")
+    parser.add_argument("--resave_light_from", type=str, default=None,
+                       help="Path to an existing model.zip to load and resave as inference-only (skips training).")
     # Add other CLI overrides here if needed
 
     args, _ = parser.parse_known_args()
@@ -104,6 +107,8 @@ def load_config(config_path_override=None):
     final_config.update(cfg_file_vars)
     if args.total_steps is not None:
         final_config['TOTAL_STEPS'] = args.total_steps
+    if args.resave_light_from is not None:
+        final_config['RESAVE_LIGHT_FROM'] = args.resave_light_from
     
     class ConfigObject:
         def __init__(self, dictionary):
@@ -189,29 +194,42 @@ def setup_model_and_env(config):
                        vf=[1024, 256, 128, 32])],
         ortho_init=(config.DEVICE != "cpu"),
     )
-
-    # PPO Model
-    print("Initializing PPO model...")
-    ppo_model = PPO(
-        "CnnPolicy",
-        vec_env,
-        learning_rate = config.LR,
-        n_steps       = config.N_STEPS,
-        batch_size    = config.BATCH,
-        n_epochs      = config.N_EPOCHS,
-        gamma         = config.GAMMA,
-        gae_lambda    = config.GAE_LAMBDA,
-        clip_range    = config.CLIP_RANGE,
-        ent_coef      = config.ENT_COEF,
-        vf_coef       = config.VF_COEF,
-        max_grad_norm = config.MAX_GRAD_NORM,
-        policy_kwargs = policy_kwargs,
-        device        = config.DEVICE,
-        verbose       = 1,
-        tensorboard_log= config.TENSORBOARD_LOG,
-        seed          = config.SEED
-    )
-    print("PPO model initialized.")
+    if config.RESAVE_LIGHT_FROM:
+        print(f"Loading existing PPO model from: {config.RESAVE_LIGHT_FROM}")
+        ppo_model = PPO.load(
+            config.RESAVE_LIGHT_FROM,
+            env=vec_env,
+            device=config.DEVICE,
+            custom_objects={
+                 "learning_rate": config.LR, # Make sure LR is what you expect or PPO.load might complain
+                 "lr_schedule": lambda _: config.LR, # Or a more complex schedule if used
+                 "clip_range": lambda _: config.CLIP_RANGE, # Or a more complex schedule
+            }
+        )
+        print("PPO model loaded.")
+    else:
+        # PPO Model
+        print("Initializing PPO model...")
+        ppo_model = PPO(
+            "CnnPolicy",
+            vec_env,
+            learning_rate = config.LR,
+            n_steps       = config.N_STEPS,
+            batch_size    = config.BATCH,
+            n_epochs      = config.N_EPOCHS,
+            gamma         = config.GAMMA,
+            gae_lambda    = config.GAE_LAMBDA,
+            clip_range    = config.CLIP_RANGE,
+            ent_coef      = config.ENT_COEF,
+            vf_coef       = config.VF_COEF,
+            max_grad_norm = config.MAX_GRAD_NORM,
+            policy_kwargs = policy_kwargs,
+            device        = config.DEVICE,
+            verbose       = 1,
+            tensorboard_log= config.TENSORBOARD_LOG,
+            seed          = config.SEED
+        )
+        print("PPO model initialized.")
     print("--- Setup Complete ---")
     return vlm_agent, vec_env, ppo_model
 
@@ -256,13 +274,16 @@ if __name__ == "__main__":
 
     # Setup callbacks
     callbacks = []
-    if use_wandb and run is not None:
-         save_path = f"models/{run.name}"
-         os.makedirs(save_path, exist_ok=True)
-         print(f"Adding WandbCallback (Save Freq: {C.SAVE_EVERY}, Path: {save_path})")
-         callbacks.append(WandbCallback(model_save_freq=C.SAVE_EVERY,
-                                        model_save_path=save_path,
-                                        verbose=1))
+    if not C.RESAVE_LIGHT_FROM:
+        if use_wandb and run is not None:
+            save_path = f"models/{run.name}"
+            os.makedirs(save_path, exist_ok=True)
+            print(f"Adding WandbCallback (Save Freq: {C.SAVE_EVERY}, Path: {save_path})")
+            callbacks.append(WandbCallback(model_save_freq=C.SAVE_EVERY,
+                                            model_save_path=save_path,
+                                            verbose=1))
+            pass
+        pass
 
     print("Adding LengthCurriculumCallback.")
     callbacks.append(LengthCurriculumCallback(target_success=C.CURRICULUM_TARGET_SUCCESS,
@@ -281,46 +302,71 @@ if __name__ == "__main__":
 
     # --- Start training ---
     start_time = time.time()
-    print(f"\nStarting training for {C.TOTAL_STEPS:,} total timesteps...")
-    final_model_name = "stage_gpu_1.0"
+    if C.RESAVE_LIGHT_FROM:
+        print(f"\n--- Resaving model from {C.RESAVE_LIGHT_FROM} ---")
+        print("Skipping training.")
+        final_model_name = Path(C.RESAVE_LIGHT_FROM).stem
+    else:
+        print(f"\nStarting training for {C.TOTAL_STEPS:,} total timesteps...")
+        final_model_name = "stage_gpu_1.0"
+        try:
+            model.learn(
+                total_timesteps=C.TOTAL_STEPS,
+                callback=CallbackList(callbacks) if callbacks else None,
+                log_interval=1
+            )
+            print("\n--- Training finished successfully ---")
+        except torch.cuda.OutOfMemoryError:
+            print("!!! CAUGHT CUDA OOM ERROR !!!")
+            traceback.print_exc()
+            final_model_name = "final_model_oom"
+        except RuntimeError as e:
+            print(f"!!! CAUGHT RUNTIME ERROR: {e} !!!")
+            if "CUDA" in str(e):
+                print("Looks like a CUDA Runtime error.")
+            traceback.print_exc()
+            final_model_name = "final_model_runtime_error"
+        except KeyboardInterrupt:
+            print("\n--- Training Interrupted by User ---")
+            final_model_name = "final_model_interrupted"
+        except Exception as e:
+            print(f"\n--- Training Error: {type(e).__name__}: {e} ---")
+            traceback.print_exc()
+            final_model_name = "final_model_error"
+        except Exception as e:
+            print(f"\n--- Training Error: {type(e).__name__}: {e} ---")
+            traceback.print_exc()
+            final_model_name = "final_model_error"
     try:
-        model.learn(
-            total_timesteps=C.TOTAL_STEPS,
-            callback=CallbackList(callbacks),
-            log_interval=1
-        )
-        print("\n--- Training finished successfully ---")
-    except torch.cuda.OutOfMemoryError:
-        print("!!! CAUGHT CUDA OOM ERROR !!!")
+        if C.RESAVE_LIGHT_FROM:
+            output_path_stem = Path(C.RESAVE_LIGHT_FROM).stem
+            output_dir = Path(C.RESAVE_LIGHT_FROM).parent
+            resaved_inference_path = output_dir / f"{output_path_stem}_inference_resaved.zip"
+            print(f"\nResaving inference-only model to: {resaved_inference_path}")
+            model.save(resaved_inference_path, exclude=["rollout_buffer"])
+            print("Inference-only model resaved.")
+        else:
+            save_dir = Path(model.tensorboard_log)
+            base_filename_stem = f"{final_model_name}_{C.TOTAL_STEPS}steps"
+
+            full_model_path = save_dir / f"{base_filename_stem}_full.zip"
+            print(f"\nSaving full final model (with rollout buffer) to: {full_model_path}")
+            model.save(full_model_path)
+            print("Full final model saved.")
+
+            inference_model_path = save_dir / f"{base_filename_stem}_inference.zip"
+            print(f"\nSaving inference-only final model (without rollout buffer) to: {inference_model_path}")
+            model.save(inference_model_path, exclude=["rollout_buffer"])
+            print("Inference-only final model saved.")
+    except Exception as save_e:
+        print(f"Error during model saving/resaving: {save_e}")
         traceback.print_exc()
-        final_model_name = "final_model_oom"
-    except RuntimeError as e:
-        print(f"!!! CAUGHT RUNTIME ERROR: {e} !!!")
-        if "CUDA" in str(e):
-            print("Looks like a CUDA Runtime error.")
-        traceback.print_exc()
-        final_model_name = "final_model_runtime_error"
-    except KeyboardInterrupt:
-        print("\n--- Training Interrupted by User ---")
-        final_model_name = "final_model_interrupted"
-    except Exception as e:
-        print(f"\n--- Training Error: {type(e).__name__}: {e} ---")
-        traceback.print_exc()
-        final_model_name = "final_model_error"
+    
     finally:
         end_time = time.time()
-        print(f"Total training time: {end_time - start_time:.2f} seconds")
+        if not C.RESAVE_LIGHT_FROM:
+            print(f"Total training time: {end_time - start_time:.2f} seconds")
 
-        # --- Save final model ---
-        try:
-            save_path = Path(model.tensorboard_log) / f"{final_model_name}_{C.TOTAL_STEPS}steps"
-            print(f"\nSaving final model to: {save_path}.zip")
-            model.save(save_path)
-            print("Model saved.")
-        except Exception as save_e:
-            print(f"Error saving final model: {save_e}")
-
-        # env close
         print("Closing environment...")
         try:
             vec_env.close()
