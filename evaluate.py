@@ -45,7 +45,6 @@ def evaluate_model_vec_batched(config):
     print(f"Model: {config.model_path}, Test Words: {config.test_word_file}, Envs: {config.n_eval_envs}")
 
     shared_vlm_agent = GOLKeyAgent(model_dir=config.model_dir_vlm)
-    shared_vlm_agent.to(torch.device(config.device))
 
     with open(config.test_word_file, 'r') as f:
         all_test_words = [line.strip() for line in f if line.strip() and len(line.strip()) >=3 and len(line.strip()) <=8]
