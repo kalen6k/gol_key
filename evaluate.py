@@ -80,9 +80,9 @@ def evaluate_model_vec_batched(config):
         eval_vec_env.env_method("set_eval_mode", True, indices=list(range(config.n_eval_envs)))
     
     policy_kwargs_for_load = dict(
-        features_extractor_class=VLMExtractor,
+        features_extractor_class=VLMExtractor, 
         features_extractor_kwargs=dict(
-            agent=vlm_for_embeddings,
+            agent=vlm_for_embeddings, # Provide a live agent instance
             vlm_internal_batch_size=config.vlm_internal_batch_size_eval
         ),
         net_arch=dict(pi=[1024, 256, 128, 32], vf=[1024, 256, 128, 32]),
@@ -90,8 +90,8 @@ def evaluate_model_vec_batched(config):
     )
 
     custom_objects_for_load = {
-        "learning_rate": 0.0003, # For schedule reconstruction if needed
-        "clip_range": 0.2,
+        "learning_rate": 0.0003, "clip_range": 0.2,
+        # This helps SB3 find the class if it's looking for __main__.VLMExtractor
         "__main__.VLMExtractor": VLMExtractor 
     }
 
@@ -101,7 +101,7 @@ def evaluate_model_vec_batched(config):
         device=config.device, 
         env=eval_vec_env,
         custom_objects=custom_objects_for_load,
-        policy_kwargs_for_load=policy_kwargs_for_load
+        policy_kwargs=policy_kwargs_for_load # Try providing it again
     )
     print("PPO model loaded.")
     
@@ -109,24 +109,42 @@ def evaluate_model_vec_batched(config):
     if hasattr(loaded_model.policy, 'features_extractor'):
         actual_extractor = loaded_model.policy.features_extractor
     
-    if actual_extractor is not None and isinstance(actual_extractor, VLMExtractor):
-        print("  SUCCESS: Loaded model has a VLMExtractor.")
-        print(f"    Original extractor agent was: {type(actual_extractor.agent)}")
-        print(f"    Setting extractor's agent to use the VLM model from vlm_for_embeddings, but keeping loaded proj layer.")
-
-        actual_extractor.agent = vlm_for_embeddings
+    # --- MODIFIED CHECK ---
+    # Check based on class name, which is more robust to class identity issues
+    # and also check if it has the 'agent' and 'proj' attributes we expect.
+    if actual_extractor is not None and \
+       getattr(actual_extractor.__class__, '__name__', None) == 'VLMExtractor' and \
+       hasattr(actual_extractor, 'agent') and \
+       hasattr(actual_extractor, 'proj'):
         
-        print(f"    Loaded VLMExtractor's 'proj' layer is on device: {actual_extractor.proj.weight.device}")
+        print("  SUCCESS: Loaded model's feature extractor appears to be a VLMExtractor (based on class name and attributes).")
+        print(f"    Extractor's current agent before modification: {type(actual_extractor.agent)}")
+        
+        # CRITICAL: Ensure the loaded extractor uses our vlm_for_embeddings for its VLM calls,
+        # but retains its OWN loaded (trained) projection layer.
+        print(f"    Setting extractor's 'agent' attribute to our live 'vlm_for_embeddings' instance.")
+        actual_extractor.agent = vlm_for_embeddings 
+        
+        # The actual_extractor.proj is the one LOADED FROM THE FILE (trained). We KEEP THIS.
+        # We just need to ensure its device is correct. PPO.load should have moved it to config.device.
+        print(f"    VLMExtractor's loaded 'proj' layer (ID: {id(actual_extractor.proj)}) is on device: {actual_extractor.proj.weight.device}")
         if actual_extractor.proj.weight.device != torch.device(config.device):
             print(f"    Moving loaded 'proj' layer to {config.device}")
             actual_extractor.proj.to(torch.device(config.device))
+        
+        # If VLMExtractor itself stores vlm_internal_batch_size, set it.
+        if hasattr(actual_extractor, 'vlm_internal_batch_size'):
+            actual_extractor.vlm_internal_batch_size = config.vlm_internal_batch_size_eval
 
-        actual_extractor.vlm_internal_batch_size = config.vlm_internal_batch_size_eval
+        print(f"    VLMExtractor now configured:")
+        print(f"        Uses VLM from 'vlm_for_embeddings' (ID: {id(vlm_for_embeddings)}, Device: {vlm_for_embeddings.device}) for '.agent.embed()'")
+        print(f"        Uses its loaded+trained projection layer (ID: {id(actual_extractor.proj)}, Device: {actual_extractor.proj.weight.device}) for '.proj()'")
 
-        print(f"    VLMExtractor now configured to use VLM from vlm_for_embeddings (device: {vlm_for_embeddings.device}) "
-              f"and its loaded+trained projection layer (device: {actual_extractor.proj.weight.device}).")
     else:
-        print(f"  CRITICAL WARNING: Loaded model's feature extractor is not a VLMExtractor. Type: {type(actual_extractor)}")
+        print(f"  CRITICAL WARNING: Loaded model's feature extractor is not a VLMExtractor as expected or is missing attributes.")
+        print(f"     Actual extractor type: {type(actual_extractor)}")
+        print(f"     Has 'agent' attr: {hasattr(actual_extractor, 'agent')}")
+        print(f"     Has 'proj' attr: {hasattr(actual_extractor, 'proj')}")
         print("     Evaluation results will be meaningless. Exiting.")
         return
     
