@@ -150,14 +150,8 @@ def evaluate_model_vec_batched(config):
 
     pbar = tqdm(total=num_total_words_to_test, desc="Evaluating words")
 
-    main_loop_iterations = 0
-    max_main_loop_iterations_to_log = 3 
-
     while len(results) < num_total_words_to_test:
         if num_active_envs == 0: break
-
-        if main_loop_iterations < max_main_loop_iterations_to_log:
-            print(f"  Main Loop Iteration {main_loop_iterations + 1}: num_active_envs={num_active_envs}, results_collected={len(results)}")
 
         actions, _ = loaded_model.predict(obs, deterministic=True)
         next_obs, step_rewards, dones, infos = eval_vec_env.step(actions)
