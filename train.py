@@ -196,11 +196,16 @@ def setup_model_and_env(config):
     )
     if config.RESAVE_LIGHT_FROM:
         print(f"Loading existing PPO model from: {config.RESAVE_LIGHT_FROM}")
-        def constant_lr_schedule(progress_remaining: float) -> float:
-            return config.LR
+        def get_constant_fn(value: float):
+            """Helper function to create a constant schedule."""
+            def constant_fn(_progress_remaining: float) -> float:
+                return value
+            return constant_fn
 
-        def constant_clip_schedule(progress_remaining: float) -> float:
-            return config.CLIP_RANGE
+        lr_schedule_fn = get_constant_fn(config.LR)
+        clip_range_fn = get_constant_fn(config.CLIP_RANGE)
+
+        clip_range_vf_fn = get_constant_fn(config.CLIP_RANGE) if config.VF_COEF > 0 else None
 
         print(f"DEBUG: Using LR={config.LR} and CLIP_RANGE={config.CLIP_RANGE} for potential schedule reconstruction.")
 
@@ -209,12 +214,29 @@ def setup_model_and_env(config):
             env=vec_env,
             device=config.DEVICE,
             custom_objects={
-                 "learning_rate": config.LR, # Make sure LR is what you expect or PPO.load might complain
-                 "lr_schedule": lambda _: config.LR, # Or a more complex schedule if used
-                 "clip_range": lambda _: config.CLIP_RANGE, # Or a more complex schedule
+                 "learning_rate": config.LR,
+                 "lr_schedule": lambda _: config.LR,
+                 "clip_range": lambda _: config.CLIP_RANGE,
+                 "lr_schedule": lr_schedule_fn,
+                 "clip_range": clip_range_fn,
+                 "clip_range_vf": clip_range_vf_fn,
             }
         )
         print("PPO model loaded.")
+        print(f"  DEBUG: Loaded ppo_model.lr_schedule: {ppo_model.lr_schedule}")
+        if callable(ppo_model.lr_schedule): print(f"    DEBUG: ppo_model.lr_schedule(0.5) evaluation: {ppo_model.lr_schedule(0.5)}")
+        else: print(f"    DEBUG: ppo_model.lr_schedule IS NOT CALLABLE.")
+
+        print(f"  DEBUG: Loaded ppo_model.clip_range: {ppo_model.clip_range}")
+        if callable(ppo_model.clip_range): print(f"    DEBUG: ppo_model.clip_range(0.5) evaluation: {ppo_model.clip_range(0.5)}")
+        else: print(f"    DEBUG: ppo_model.clip_range IS NOT CALLABLE.")
+
+        if hasattr(ppo_model, "clip_range_vf"):
+            print(f"  DEBUG: Loaded ppo_model.clip_range_vf: {ppo_model.clip_range_vf}")
+            if ppo_model.clip_range_vf is not None and callable(ppo_model.clip_range_vf): print(f"    DEBUG: ppo_model.clip_range_vf(0.5) evaluation: {ppo_model.clip_range_vf(0.5)}")
+            elif ppo_model.clip_range_vf is not None: print(f"    DEBUG: ppo_model.clip_range_vf IS NOT CALLABLE (but not None).")
+            else: print(f"    DEBUG: ppo_model.clip_range_vf IS None.")
+        else: print("  DEBUG: ppo_model does not have attribute clip_range_vf.")
         if ppo_model.lr_schedule is None or not callable(ppo_model.lr_schedule):
             print(f"WARNING: ppo_model.lr_schedule is {ppo_model.lr_schedule}. This might be an issue.")
         if ppo_model.clip_range is None or not callable(ppo_model.clip_range):
@@ -297,20 +319,20 @@ if __name__ == "__main__":
             pass
         pass
 
-    print("Adding LengthCurriculumCallback.")
-    callbacks.append(LengthCurriculumCallback(target_success=C.CURRICULUM_TARGET_SUCCESS,
-                                              window=C.CURRICULUM_WINDOW,
-                                              max_len_limit=C.MAX_LEN_LIMIT,
-                                              verbose=1))
-    
-    print("Adding SuccessRateCallback.")
-    callbacks.append(SuccessRateCallback(window_size=24, verbose=1))
+        print("Adding LengthCurriculumCallback.")
+        callbacks.append(LengthCurriculumCallback(target_success=C.CURRICULUM_TARGET_SUCCESS,
+                                                window=C.CURRICULUM_WINDOW,
+                                                max_len_limit=C.MAX_LEN_LIMIT,
+                                                verbose=1))
+        
+        print("Adding SuccessRateCallback.")
+        callbacks.append(SuccessRateCallback(window_size=24, verbose=1))
 
-    print("Adding PromptHintCallback.")
-    callbacks.append(PromptHintCallback(target_success=C.PROMPT_HINT_TARGET_SUCCESS,
-                                        window=C.CURRICULUM_WINDOW,
-                                        max_len_limit=C.MAX_LEN_LIMIT,
-                                        verbose=1))
+        print("Adding PromptHintCallback.")
+        callbacks.append(PromptHintCallback(target_success=C.PROMPT_HINT_TARGET_SUCCESS,
+                                            window=C.CURRICULUM_WINDOW,
+                                            max_len_limit=C.MAX_LEN_LIMIT,
+                                            verbose=1))
 
     # --- Start training ---
     start_time = time.time()
