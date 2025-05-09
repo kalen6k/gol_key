@@ -77,48 +77,70 @@ def evaluate_model_vec_batched(config):
             eval_vec_env.unwrapped.envs[i].set_eval_mode(True)
     else:
         eval_vec_env.env_method("set_eval_mode", True, indices=list(range(config.n_eval_envs)))
+    
+    policy_kwargs_for_load = dict(
+        features_extractor_class=VLMExtractor,
+        features_extractor_kwargs=dict(
+            agent=shared_vlm_agent, 
+            vlm_internal_batch_size=config.vlm_internal_batch_size_eval
+        ),
+        net_arch=dict(pi=[1024, 256, 128, 32],
+                      vf=[1024, 256, 128, 32]),
+        ortho_init=(config.device.lower() != "cpu")
+    )
+
+    custom_objects_for_load = {
+        "learning_rate": 0.0003, # For schedule reconstruction if needed
+        "clip_range": 0.2,
+        "__main__.VLMExtractor": VLMExtractor 
+    }
 
     print("Attempting to load model WITHOUT explicit policy_kwargs...")
     loaded_model = PPO.load(
         config.model_path, 
         device=config.device, 
         env=eval_vec_env, # env is often important for space inference
-        custom_objects={
-            "learning_rate": 0.0003, "clip_range": 0.2,
-        }
+        custom_objects=custom_objects_for_load,
+        policy_kwargs_for_load=policy_kwargs_for_load
     )
     print("PPO model loaded.")
-    if hasattr(loaded_model.policy.features_extractor, 'agent') and \
+    if hasattr(loaded_model.policy, 'features_extractor') and \
        isinstance(loaded_model.policy.features_extractor, VLMExtractor):
-        print("Manually setting agent for loaded VLMExtractor...")
-        loaded_model.policy.features_extractor.agent = shared_vlm_agent
-        loaded_model.policy.features_extractor.proj = shared_vlm_agent.proj
-        loaded_model.policy.features_extractor.vlm_internal_batch_size = config.vlm_internal_batch_size_eval
-        expected_features_dim = shared_vlm_agent.intermediate_state
-        if loaded_model.policy.features_extractor.features_dim != expected_features_dim:
-            print(f"Warning: Loaded VLMExtractor features_dim {loaded_model.policy.features_extractor.features_dim} "
-                  f"does not match current agent's intermediate_state {expected_features_dim}. Re-initializing proj might be needed if not done by SB3.")
-            
+        print("  SUCCESS: Loaded model IS using the expected VLMExtractor type.")
+        # Verify the agent instance is the one we passed if possible (can be tricky due to pickling)
+        if loaded_model.policy.features_extractor.agent is shared_vlm_agent:
+            print("  SUCCESS: VLMExtractor is using the shared_vlm_agent instance directly.")
+        else:
+            print("  INFO: VLMExtractor is using an agent instance. (This is okay if it's functionally equivalent due to pickling/unpickling of kwargs).")
+            loaded_model.policy.features_extractor.agent.model = shared_vlm_agent.model
+            loaded_model.policy.features_extractor.agent.proj = shared_vlm_agent.proj
+            loaded_model.policy.features_extractor.proj = shared_vlm_agent.proj
+            loaded_model.policy.features_extractor.agent.device = shared_vlm_agent.device
+            loaded_model.policy.features_extractor.agent.model.to(shared_vlm_agent.device)
+            loaded_model.policy.features_extractor.agent.proj.to(shared_vlm_agent.device)
     else:
-        print("Warning: Loaded model does not have expected VLMExtractor.")
+        print("WARNING: Loaded model does NOT have the expected VLMExtractor type even after providing policy_kwargs.")
+        print(f"     Actual extractor type: {type(loaded_model.policy.features_extractor)}")
 
 
     if hasattr(loaded_model.policy.features_extractor, 'agent') and \
-       isinstance(loaded_model.policy.features_extractor.agent, GOLKeyAgent): # Ensure it's our agent type
+       isinstance(loaded_model.policy.features_extractor.agent, GOLKeyAgent):
         
-        vlm_device = loaded_model.policy.features_extractor.agent.device
-        ppo_policy_device = loaded_model.policy.device # Device of the PPO policy's networks
+        vlm_device_str = str(loaded_model.policy.features_extractor.agent.device)
+        ppo_policy_device_str = str(loaded_model.policy.device)
 
-        print(f"  INFO: VLM (GOLKeyAgent) is operating on device: {vlm_device}")
-        print(f"  INFO: PPO policy networks are on device: {ppo_policy_device}")
+        print(f"  INFO: VLM (GOLKeyAgent within extractor) is operating on device: {vlm_device_str}")
+        print(f"  INFO: PPO policy networks are on device: {ppo_policy_device_str}")
 
-        if vlm_device != ppo_policy_device:
-            print(f"  WARNING: Device mismatch! VLM device ({vlm_device}) and PPO policy device ({ppo_policy_device}) differ.")
-            print(f"           Data will be transferred between devices during forward passes. This is functional but may impact performance.")
-            print(f"           - Observations (on {ppo_policy_device}) will be moved to {vlm_device} for VLM embedding.")
-            print(f"           - Extracted features (on {vlm_device}) will be moved to {ppo_policy_device} for PPO MLPs.")
+        if torch.cuda.device_count() == 1:
+            if vlm_device_str == "cuda:0": vlm_device_str = "cuda"
+            if ppo_policy_device_str == "cuda:0": ppo_policy_device_str = "cuda"
+            
+        if vlm_device_str != ppo_policy_device_str:
+            print(f"  WARNING: Device mismatch detected! VLM device ({loaded_model.policy.features_extractor.agent.device}) "
+                  f"and PPO policy device ({loaded_model.policy.device}) may lead to data transfers.")
         else:
-            print(f"  INFO: VLM and PPO policy devices match ({vlm_device}). Ready")
+            print(f"  INFO: VLM and PPO policy devices appear consistent ({vlm_device_str}).")
     
     results = []
     next_word_idx = 0
