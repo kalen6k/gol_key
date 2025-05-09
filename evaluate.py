@@ -78,16 +78,6 @@ def evaluate_model_vec_batched(config):
     else:
         eval_vec_env.env_method("set_eval_mode", True, indices=list(range(config.n_eval_envs)))
 
-    # policy_kwargs_for_load = dict(
-    #     features_extractor_class=VLMExtractor,
-    #     features_extractor_kwargs=dict(
-    #         agent=shared_vlm_agent,
-    #         vlm_internal_batch_size=config.vlm_internal_batch_size_eval
-    #     ),
-    #     net_arch=dict(pi=[1024, 256, 128, 32],
-    #                   vf=[1024, 256, 128, 32]),
-    #     ortho_init=(config.device.lower() != "cpu")
-    # )
     print("Attempting to load model WITHOUT explicit policy_kwargs...")
     loaded_model = PPO.load(
         config.model_path, 
@@ -160,14 +150,14 @@ def evaluate_model_vec_batched(config):
 
     pbar = tqdm(total=num_total_words_to_test, desc="Evaluating words")
 
-    steps_taken_in_loop = 0
-    max_initial_steps_to_log = 5 
+    main_loop_iterations = 0
+    max_main_loop_iterations_to_log = 3 
 
     while len(results) < num_total_words_to_test:
         if num_active_envs == 0: break
 
-        if steps_taken_in_loop < max_initial_steps_to_log:
-            print(f"  Loop iteration {steps_taken_in_loop + 1}, num_active_envs: {num_active_envs}, results collected: {len(results)}")
+        if main_loop_iterations < max_main_loop_iterations_to_log:
+            print(f"  Main Loop Iteration {main_loop_iterations + 1}: num_active_envs={num_active_envs}, results_collected={len(results)}")
 
         actions, _ = loaded_model.predict(obs, deterministic=True)
         next_obs, step_rewards, dones, infos = eval_vec_env.step(actions)
@@ -180,8 +170,9 @@ def evaluate_model_vec_batched(config):
 
 
             if dones[i]:
-                if steps_taken_in_loop < max_initial_steps_to_log * config.n_eval_envs or len(results) % 10 == 0 : # Log first few dones or every 10th
-                    print(f"    Env {i} finished episode for word '{current_word_for_env[i]}'. Success: {infos[i].get('success', False)}. Results: {len(results)+1}/{num_total_words_to_test}")
+                num_completed_overall = len(results)
+                if num_completed_overall < 5 or (num_completed_overall + 1) % 10 == 0 : 
+                    print(f"    Env {i} finished episode for word '{current_word_for_env[i]}'. Success: {infos[i].get('success', False)}. Total Results: {num_completed_overall + 1}/{num_total_words_to_test}")
                 processed_word = current_word_for_env[i]
                 if processed_word:
                     results.append({
