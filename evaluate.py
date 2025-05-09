@@ -10,7 +10,8 @@ import pandas as pd
 from tqdm import tqdm
 
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import VecTransposeImage, DummyVecEnv, BaseFeaturesExtractor
+from stable_baselines3.common.vec_env import VecTransposeImage, DummyVecEnv
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 from agent_model import GOLKeyAgent
 from word_env import WordTargetWrapper
