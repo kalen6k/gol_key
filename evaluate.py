@@ -23,7 +23,7 @@ class VLMExtractor(BaseFeaturesExtractor):
         self.agent = agent
         self.proj = agent.proj
         self.vlm_internal_batch_size = vlm_internal_batch_size
-        # print(f"VLMExtractor Initialized: Features Dim = {agent.intermediate_state}")
+        print(f"VLMExtractor Initialized. Agent ID: {id(self.agent)}, Proj ID: {id(self.proj)}, Features Dim: {agent.intermediate_state if agent else 'N/A'}")
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
@@ -59,8 +59,9 @@ def evaluate_model_vec_batched(config):
     print(f"--- Starting Batched Vectorized Evaluation ---")
     print(f"Model: {config.model_path}, Test Words: {config.test_word_file}, Envs: {config.n_eval_envs}")
 
-    print("Initializing GOLKeyAgent (for its VLM model component)...")
-    vlm_for_embeddings = GOLKeyAgent(model_dir=config.model_dir_vlm)
+    print("Initializing GOLKeyAgent (this will be our 'live' VLM source)...")
+    live_vlm_provider = GOLKeyAgent(model_dir=config.model_dir_vlm)
+    print(f"Live GOLKeyAgent initialized. ID: {id(live_vlm_provider)}, Device: {live_vlm_provider.device}")
 
     with open(config.test_word_file, 'r') as f:
         all_test_words = [line.strip() for line in f if line.strip() and len(line.strip()) >=3 and len(line.strip()) <=8]
@@ -69,30 +70,17 @@ def evaluate_model_vec_batched(config):
         print("No test words. Exiting."); return
     print(f"Loaded {num_total_words_to_test} test words.")
     
-    env_fns = [make_env_fn_eval(i, i + 420, config.test_word_file, config.GRID_SHAPE, config.env_max_steps, vlm_for_embeddings) for i in range(config.n_eval_envs)]
+    env_fns = [make_env_fn_eval(i, i + 420, config.test_word_file, config.GRID_SHAPE, config.env_max_steps, live_vlm_provider) for i in range(config.n_eval_envs)]
     eval_vec_env = DummyVecEnv(env_fns)
     eval_vec_env = VecTransposeImage(eval_vec_env)
-
     if isinstance(eval_vec_env.unwrapped, DummyVecEnv):
-        for i in range(config.n_eval_envs):
-            eval_vec_env.unwrapped.envs[i].set_eval_mode(True)
-    else:
-        eval_vec_env.env_method("set_eval_mode", True, indices=list(range(config.n_eval_envs)))
-    
-    policy_kwargs_for_load = dict(
-        features_extractor_class=VLMExtractor, 
-        features_extractor_kwargs=dict(
-            agent=vlm_for_embeddings, # Provide a live agent instance
-            vlm_internal_batch_size=config.vlm_internal_batch_size_eval
-        ),
-        net_arch=dict(pi=[1024, 256, 128, 32], vf=[1024, 256, 128, 32]),
-        ortho_init=(config.device.lower() != "cpu")
-    )
+        for i in range(config.n_eval_envs): eval_vec_env.unwrapped.envs[i].set_eval_mode(True)
+    else: eval_vec_env.env_method("set_eval_mode", True, indices=list(range(config.n_eval_envs)))
 
     custom_objects_for_load = {
-        "learning_rate": 0.0003, "clip_range": 0.2,
-        # This helps SB3 find the class if it's looking for __main__.VLMExtractor
-        "__main__.VLMExtractor": VLMExtractor 
+        "learning_rate": 0.0003,
+        "clip_range": 0.2,
+        "__main__.VLMExtractor": VLMExtractor
     }
 
     print("Attempting to load PPO model...")
@@ -100,8 +88,7 @@ def evaluate_model_vec_batched(config):
         config.model_path, 
         device=config.device, 
         env=eval_vec_env,
-        custom_objects=custom_objects_for_load,
-        policy_kwargs=policy_kwargs_for_load # Try providing it again
+        custom_objects=custom_objects_for_load
     )
     print("PPO model loaded.")
     
@@ -109,42 +96,32 @@ def evaluate_model_vec_batched(config):
     if hasattr(loaded_model.policy, 'features_extractor'):
         actual_extractor = loaded_model.policy.features_extractor
     
-    # --- MODIFIED CHECK ---
-    # Check based on class name, which is more robust to class identity issues
-    # and also check if it has the 'agent' and 'proj' attributes we expect.
     if actual_extractor is not None and \
-       getattr(actual_extractor.__class__, '__name__', None) == 'VLMExtractor' and \
-       hasattr(actual_extractor, 'agent') and \
-       hasattr(actual_extractor, 'proj'):
+       getattr(actual_extractor.__class__, '__name__', None) == 'VLMExtractor':
+        print("  SUCCESS: Loaded model's feature extractor IS a VLMExtractor (by class name).")
         
-        print("  SUCCESS: Loaded model's feature extractor appears to be a VLMExtractor (based on class name and attributes).")
-        print(f"    Extractor's current agent before modification: {type(actual_extractor.agent)}")
+        print(f"    Extractor's current agent (loaded from file): {type(actual_extractor.agent)}, ID: {id(actual_extractor.agent)}")
+        print(f"    Extractor's current proj (loaded from file): {type(actual_extractor.proj)}, ID: {id(actual_extractor.proj)}, Device: {actual_extractor.proj.weight.device if hasattr(actual_extractor.proj, 'weight') else 'N/A'}")
+
+        print(f"    Reconfiguring loaded VLMExtractor:")
+        print(f"        Setting actual_extractor.agent to live_vlm_provider (ID: {id(live_vlm_provider)})")
+        actual_extractor.agent = live_vlm_provider 
         
-        # CRITICAL: Ensure the loaded extractor uses our vlm_for_embeddings for its VLM calls,
-        # but retains its OWN loaded (trained) projection layer.
-        print(f"    Setting extractor's 'agent' attribute to our live 'vlm_for_embeddings' instance.")
-        actual_extractor.agent = vlm_for_embeddings 
-        
-        # The actual_extractor.proj is the one LOADED FROM THE FILE (trained). We KEEP THIS.
-        # We just need to ensure its device is correct. PPO.load should have moved it to config.device.
-        print(f"    VLMExtractor's loaded 'proj' layer (ID: {id(actual_extractor.proj)}) is on device: {actual_extractor.proj.weight.device}")
         if actual_extractor.proj.weight.device != torch.device(config.device):
-            print(f"    Moving loaded 'proj' layer to {config.device}")
+            print(f"        Moving actual_extractor.proj (loaded, trained) to device {config.device}")
             actual_extractor.proj.to(torch.device(config.device))
         
-        # If VLMExtractor itself stores vlm_internal_batch_size, set it.
         if hasattr(actual_extractor, 'vlm_internal_batch_size'):
             actual_extractor.vlm_internal_batch_size = config.vlm_internal_batch_size_eval
+            print(f"        Set actual_extractor.vlm_internal_batch_size to {config.vlm_internal_batch_size_eval}")
 
-        print(f"    VLMExtractor now configured:")
-        print(f"        Uses VLM from 'vlm_for_embeddings' (ID: {id(vlm_for_embeddings)}, Device: {vlm_for_embeddings.device}) for '.agent.embed()'")
-        print(f"        Uses its loaded+trained projection layer (ID: {id(actual_extractor.proj)}, Device: {actual_extractor.proj.weight.device}) for '.proj()'")
+        print(f"    VLMExtractor Reconfigured. Check:")
+        print(f"        actual_extractor.agent (for .embed): {type(actual_extractor.agent)}, ID: {id(actual_extractor.agent)}")
+        print(f"        actual_extractor.proj (for projection): {type(actual_extractor.proj)}, ID: {id(actual_extractor.proj)}, Device: {actual_extractor.proj.weight.device}")
 
     else:
-        print(f"  CRITICAL WARNING: Loaded model's feature extractor is not a VLMExtractor as expected or is missing attributes.")
+        print(f"  CRITICAL WARNING: Loaded model's feature extractor is NOT a VLMExtractor as expected or is missing attributes.")
         print(f"     Actual extractor type: {type(actual_extractor)}")
-        print(f"     Has 'agent' attr: {hasattr(actual_extractor, 'agent')}")
-        print(f"     Has 'proj' attr: {hasattr(actual_extractor, 'proj')}")
         print("     Evaluation results will be meaningless. Exiting.")
         return
     
