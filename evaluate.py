@@ -20,11 +20,19 @@ class VLMExtractor(BaseFeaturesExtractor):
     """ Custom feature extractor using the GOLKeyAgent's embed method. """
     def __init__(self, observation_space, agent: "GOLKeyAgent", vlm_internal_batch_size: int):
         super().__init__(observation_space, features_dim=agent.intermediate_state)
-        self.agent = agent
+        self.agent_for_embed = agent
+        if not hasattr(agent, 'patch_dim') or not hasattr(agent, 'intermediate_state'):
+            raise ValueError("The GOLKeyAgent instance provided to VLMExtractor during load "
+                             "is missing 'patch_dim' or 'intermediate_state'. "
+                             "Ensure GOLKeyAgent unpickles with these attributes.")
+            
+        self.proj = torch.nn.Linear(agent.patch_dim, agent.intermediate_state)
         self.proj = agent.proj
         self.vlm_internal_batch_size = vlm_internal_batch_size
-        print(f"VLMExtractor Initialized. Agent ID: {id(self.agent)}, Proj ID: {id(self.proj)}, Features Dim: {agent.intermediate_state if agent else 'N/A'}")
-
+        print(f"VLMExtractor Initialized. Agent for embed (initially unpickled): {id(self.agent_for_embed)}, "
+              f"Proj (created, for SB3 to load weights into): {id(self.proj)}, "
+              f"Features Dim: {self.features_dim}")
+        
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
             raw_features = self.agent.embed(obs, max_batch=self.vlm_internal_batch_size)
@@ -100,30 +108,28 @@ def evaluate_model_vec_batched(config):
        getattr(actual_extractor.__class__, '__name__', None) == 'VLMExtractor':
         print("  SUCCESS: Loaded model's feature extractor IS a VLMExtractor (by class name).")
         
-        print(f"    Extractor's current agent (loaded from file): {type(actual_extractor.agent)}, ID: {id(actual_extractor.agent)}")
-        print(f"    Extractor's current proj (loaded from file): {type(actual_extractor.proj)}, ID: {id(actual_extractor.proj)}, Device: {actual_extractor.proj.weight.device if hasattr(actual_extractor.proj, 'weight') else 'N/A'}")
+        print(f"    Actual_extractor.agent_for_embed (unpickled by SB3): {type(actual_extractor.agent_for_embed)}, ID: {id(actual_extractor.agent_for_embed)}")
+        print(f"    Actual_extractor.proj (weights loaded by SB3): {type(actual_extractor.proj)}, ID: {id(actual_extractor.proj)}, Device: {actual_extractor.proj.weight.device}")
 
-        print(f"    Reconfiguring loaded VLMExtractor:")
-        print(f"        Setting actual_extractor.agent to live_vlm_provider (ID: {id(live_vlm_provider)})")
-        actual_extractor.agent = live_vlm_provider 
+        print(f"    Reconfiguring the VLM components of the extractor's internal agent...")
         
-        if actual_extractor.proj.weight.device != torch.device(config.device):
-            print(f"        Moving actual_extractor.proj (loaded, trained) to device {config.device}")
-            actual_extractor.proj.to(torch.device(config.device))
+        unpickled_agent_in_extractor = actual_extractor.agent_for_embed
         
+        unpickled_agent_in_extractor.model = live_vlm_provider.model
+        unpickled_agent_in_extractor.tokenizer = live_vlm_provider.tokenizer
+        unpickled_agent_in_extractor.processor = live_vlm_provider.processor
+        unpickled_agent_in_extractor.device = live_vlm_provider.device
+        
+        print(f"    Reconfiguration complete. Extractor will use:")
+        print(f"        VLM components from live_vlm_provider (Model ID: {id(unpickled_agent_in_extractor.model)})")
+        print(f"        Its own loaded & trained proj layer (ID: {id(actual_extractor.proj)}, Device: {actual_extractor.proj.weight.device})")
         if hasattr(actual_extractor, 'vlm_internal_batch_size'):
-            actual_extractor.vlm_internal_batch_size = config.vlm_internal_batch_size_eval
-            print(f"        Set actual_extractor.vlm_internal_batch_size to {config.vlm_internal_batch_size_eval}")
-
-        print(f"    VLMExtractor Reconfigured. Check:")
-        print(f"        actual_extractor.agent (for .embed): {type(actual_extractor.agent)}, ID: {id(actual_extractor.agent)}")
-        print(f"        actual_extractor.proj (for projection): {type(actual_extractor.proj)}, ID: {id(actual_extractor.proj)}, Device: {actual_extractor.proj.weight.device}")
+                    actual_extractor.vlm_internal_batch_size = config.vlm_internal_batch_size_eval
 
     else:
-        print(f"  CRITICAL WARNING: Loaded model's feature extractor is NOT a VLMExtractor as expected or is missing attributes.")
+        print(f"  CRITICAL WARNING: Loaded model's feature extractor is NOT a VLMExtractor as expected.")
         print(f"     Actual extractor type: {type(actual_extractor)}")
-        print("     Evaluation results will be meaningless. Exiting.")
-        return
+        return 
     
     print("\n--- Post-load VLMExtractor Configuration Check ---")
     print(f"Extractor Type: {type(loaded_model.policy.features_extractor)}")
